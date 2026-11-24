@@ -14,8 +14,9 @@ A bouncing-ball instrument. Three rubber balls hop across a tray of sixteen dimp
 - **Tap again** to send it somewhere else. The yellow dot shows where it's headed.
 - **lo / mid / hi** choose which ball listens to you. Tap the lit one to call it home.
 - **Catch a ball.** Touch one in the air and it stops in your hand. Flick to throw it, or just let go and it dribbles where you set it down. A ball that's sitting still can be picked up the same way.
-- **▶** serves all three. **■** calls them all back.
-- **tempo** is how fast the balls travel. **bounce** is how much of each hop the next one keeps: all the way up they never stop, lower and they rattle to rest like a dropped ball. **tone** goes from soft to glassy. **scale** retunes the tray.
+- **▶** serves all three. **■** calls them all back, and **▶** serves them again just as they were.
+- **tempo** is how fast the balls travel. **bounce** is how much of each hop the next one keeps: all the way up they never stop, lower and they rattle to rest like a dropped ball. **tone** goes from soft to glassy. **scale** retunes the tray; push the knob in and the root moves up a semitone.
+- **link** copies an address that holds what is playing: the three throws, the knobs and the root. Open it anywhere and press ▶. The address bar always holds it too, so a reload keeps your loop.
 
 Keyboard: `1234` `QWER` `ASDF` `ZXCV` are the dimples, `J` `K` `L` choose a ball, `space` is play/stop.
 

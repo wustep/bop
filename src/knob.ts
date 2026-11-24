@@ -1,10 +1,14 @@
 /**
  * A chunky knob. Drag up or right to turn it; wheel, arrow keys and
  * double-click-to-reset also work. Stepped knobs click between detents.
+ *
+ * A knob given `onPush` is also a button, like an encoder you can press: a
+ * touch that lets go without turning it is a push.
  */
 
 const SWEEP = 270; // degrees of travel
 const TRAVEL = 190; // px of drag for the full sweep
+const PUSH = { slop: 5, ms: 450 }; // a push moves less than this and is over sooner
 
 export interface KnobOptions {
   label: string;
@@ -12,6 +16,8 @@ export interface KnobOptions {
   steps?: number;
   format: (v: number) => string;
   onChange: (v: number) => void;
+  /** pressed without being turned */
+  onPush?: () => void;
 }
 
 export class Knob {
@@ -85,6 +91,20 @@ export class Knob {
     this.timer = window.setTimeout(() => this.lbl.classList.remove("show"), 900);
   }
 
+  /** the label briefly reads out something else */
+  say(text: string) {
+    this.val.textContent = text;
+    this.flash();
+  }
+
+  private push() {
+    if (!this.opts.onPush) return;
+    this.opts.onPush();
+    // the cap goes down and comes back
+    this.knob.classList.add("pushed");
+    window.setTimeout(() => this.knob.classList.remove("pushed"), 110);
+  }
+
   private bind() {
     const k = this.knob;
     let id = -1;
@@ -92,6 +112,8 @@ export class Knob {
     let startY = 0;
     let startV = 0;
     let raw = 0;
+    let moved = 0;
+    let downAt = 0;
 
     k.addEventListener("pointerdown", (e) => {
       if (id !== -1) return;
@@ -100,20 +122,27 @@ export class Knob {
       startX = e.clientX;
       startY = e.clientY;
       startV = raw = this.value;
+      moved = 0;
+      downAt = performance.now();
       k.classList.add("held");
-      this.flash();
+      // a knob that can be pushed keeps quiet until it knows which this is
+      if (!this.opts.onPush) this.flash();
     });
     k.addEventListener("pointermove", (e) => {
       if (e.pointerId !== id) return;
+      moved = Math.max(moved, Math.hypot(e.clientX - startX, e.clientY - startY));
+      if (this.opts.onPush && moved < PUSH.slop) return;
       const d = e.clientX - startX - (e.clientY - startY);
       raw = startV + d / (TRAVEL * (e.shiftKey ? 4 : 1));
       this.set(raw);
+      this.paint();
       this.flash();
     });
     const end = (e: PointerEvent) => {
       if (e.pointerId !== id) return;
       id = -1;
       k.classList.remove("held");
+      if (e.type === "pointerup" && moved < PUSH.slop && performance.now() - downAt < PUSH.ms) this.push();
     };
     k.addEventListener("pointerup", end);
     k.addEventListener("pointercancel", end);
@@ -129,7 +158,8 @@ export class Knob {
       { passive: false },
     );
 
-    k.addEventListener("dblclick", () => this.set(this.opts.value));
+    // (on a knob that is also a button, two quick presses are two pushes)
+    if (!this.opts.onPush) k.addEventListener("dblclick", () => this.set(this.opts.value));
 
     k.addEventListener("keydown", (e) => {
       const n = this.opts.steps;
@@ -138,6 +168,7 @@ export class Knob {
       else if (e.key === "ArrowDown" || e.key === "ArrowLeft") this.set(this.value - inc);
       else if (e.key === "Home") this.set(0);
       else if (e.key === "End") this.set(1);
+      else if ((e.key === "Enter" || e.key === " ") && this.opts.onPush) this.push();
       else return;
       e.preventDefault();
       e.stopPropagation();

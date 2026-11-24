@@ -25,6 +25,14 @@ export const SCALES: Scale[] = [
 
 export const ROOT = 60; // C4
 
+/**
+ * The root can be any of the twelve notes. Rather than climbing eleven
+ * semitones to reach B, the upper half comes down instead (G is a fourth
+ * below C, not a fifth above), so the tray never strays more than a tritone
+ * from where the voices were tuned.
+ */
+export const rootShift = (root: number) => (root <= 6 ? root : root - 12);
+
 const NAMES = ["C", "C♯", "D", "E♭", "E", "F", "F♯", "G", "A♭", "A", "B♭", "B"];
 
 /** semitones above the root for a pad */

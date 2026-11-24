@@ -78,6 +78,18 @@ export interface Fx {
 
 export type Mode = "home" | "rest" | "fly" | "held";
 
+/**
+ * A course a ball has been set on, in a form that can be written down and
+ * set again later: it lands on `pad`, carries on by `sx, sy`, and `phase`
+ * says when, in steps, against the other balls.
+ */
+export interface Throw {
+  pad: number;
+  sx: number;
+  sy: number;
+  phase: number;
+}
+
 export interface Ball {
   id: number;
   mode: Mode;
@@ -99,6 +111,12 @@ export interface Ball {
   /** how far past an edge well the centre can travel before touching the wall (cells) */
   edge: number;
   fx: Fx[];
+  /** the player has just set a new course; it is written down at the next landing */
+  fresh: boolean;
+  /** the course it is on: where it first landed, the stride it left with, and at which step */
+  course: { pad: number; stride: Vec; t: number } | null;
+  /** stride to leave a served landing with, if the serve asked for one */
+  serveStride: Vec | null;
 }
 
 export interface Pose {
@@ -120,6 +138,22 @@ const mod = (a: number, n: number) => ((a % n) + n) % n;
 const cheb = (v: Vec) => Math.max(Math.abs(v.x), Math.abs(v.y));
 /** how many steps a hop of this stride takes */
 const stepsOf = (s: Vec) => cheb(s) || DRIBBLE;
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+
+/**
+ * Steps until a lossless ball on this stride is back in the same well going
+ * the same way. Walls fold a line of travel every 2n wells, so it is short:
+ * 24 steps at most for a stride of three, 40 for the five-well stride a ball
+ * can leave a far nest with.
+ */
+export function period(sx: number, sy: number): number {
+  const ax = Math.abs(Math.round(sx));
+  const ay = Math.abs(Math.round(sy));
+  const hx = ax ? (2 * W) / gcd(2 * W, ax) : 1;
+  const hy = ay ? (2 * H) / gcd(2 * H, ay) : 1;
+  const hops = (hx * hy) / gcd(hx, hy);
+  return hops * (Math.max(ax, ay) || DRIBBLE);
+}
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 /** reflect an unbounded coordinate into the tray, walls half a cell past the edge wells */
@@ -172,6 +206,9 @@ export class Engine {
         servePad: -1,
         edge: 0.4,
         fx: [],
+        fresh: false,
+        course: null,
+        serveStride: null,
       });
     }
   }
@@ -212,6 +249,7 @@ export class Engine {
     if (b.mode === "held") return;
     b.serveAt = -1;
     b.homing = false;
+    b.fresh = true;
     if (b.mode === "home") {
       this.enter(b, pad, s, b.home, 0);
     } else if (b.mode === "rest") {
@@ -233,6 +271,8 @@ export class Engine {
     const b = this.balls[id];
     b.serveAt = -1;
     b.target = -1;
+    b.fresh = false;
+    b.course = null;
     if (b.mode === "home" || b.mode === "held") return;
     if (b.mode === "rest") {
       b.mode = "fly";
@@ -256,6 +296,8 @@ export class Engine {
     b.target = -1;
     b.homing = false;
     b.fx.length = 0;
+    b.fresh = false;
+    b.course = null;
     this.unsay(b);
     b.hop = null;
     b.prev = null;
@@ -283,6 +325,7 @@ export class Engine {
     const speed = Math.hypot(vel.x, vel.y);
     const overTray = at.x > -0.8 && at.x < W - 0.2 && at.y > -0.8 && at.y < H - 0.2;
     b.mode = "fly";
+    b.fresh = true;
     if (!overTray && speed < FLICK) {
       this.flyHome(b, t0, at, z0);
       return;
@@ -318,12 +361,68 @@ export class Engine {
     });
   }
 
-  /** launch from the nest after a delay, in steps */
-  serve(id: number, pad: number, now: number, delaySteps: number) {
+  /**
+   * Launch from the nest after a delay, in steps. With a stride, the ball
+   * lands on the pad and leaves it that way, whatever line it flew in on.
+   */
+  serve(id: number, pad: number, now: number, delaySteps: number, stride?: Vec) {
     const b = this.balls[id];
     if (b.mode !== "home") return;
     b.serveAt = this.stepAt(now) + delaySteps;
     b.servePad = pad;
+    b.serveStride = stride ? { ...stride } : null;
+  }
+
+  /**
+   * What the balls are doing, written down so it can be done again. A ball
+   * in its nest, in a hand or on its way home is null.
+   *
+   * A lossless ball repeats, so its `phase` is taken modulo its period: the
+   * same loop always reads the same however long it has been running.
+   */
+  snapshot(): (Throw | null)[] {
+    const out = this.balls.map((b): Throw | null => {
+      const c = b.course;
+      if (!c || b.mode === "home" || b.mode === "held" || (b.hop !== null && b.hop.pad < 0)) return null;
+      const sx = Math.round(c.stride.x);
+      const sy = Math.round(c.stride.y);
+      return { pad: c.pad, sx, sy, phase: mod(Math.round(c.t - this.phase), period(sx, sy)) };
+    });
+    // Only the phases against each other matter, so slide them all together
+    // to where the latest is as early as it can be. One loop, one spelling:
+    // every slide there is has to be tried, and together the balls only
+    // repeat after the least common multiple of their periods.
+    const live = out.filter((t): t is Throw => t !== null);
+    const all = live.reduce((n, t) => {
+      const p = period(t.sx, t.sy);
+      return (n * p) / gcd(n, p);
+    }, 1);
+    let best = 0;
+    let bestMax = Infinity;
+    for (let k = 0; k < all; k++) {
+      const max = Math.max(0, ...live.map((t) => mod(t.phase - k, period(t.sx, t.sy))));
+      if (max < bestMax) {
+        bestMax = max;
+        best = k;
+      }
+    }
+    for (const t of live) t.phase = mod(t.phase - best, period(t.sx, t.sy));
+    return out;
+  }
+
+  /**
+   * Set the balls on courses that were written down with snapshot(). They
+   * leave their nests so as to land where and when the snapshot says, a few
+   * steps from now.
+   */
+  restore(throws: (Throw | null)[], now: number) {
+    // as long as the longest first hop, so nobody has to have left already
+    const lead = Math.max(1, ...throws.map((th) => (th ? stepsOf({ x: th.sx, y: th.sy }) : 0)));
+    throws.forEach((th, id) => {
+      if (!th || id >= this.balls.length) return;
+      const stride = { x: th.sx, y: th.sy };
+      this.serve(id, th.pad, now, lead + th.phase - stepsOf(stride), stride);
+    });
   }
 
   // ── simulation ─────────────────────────────────────────────────────────
@@ -335,7 +434,10 @@ export class Engine {
       if (b.serveAt >= 0 && s >= b.serveAt) {
         const at = b.serveAt;
         b.serveAt = -1;
-        if (b.mode === "home") this.enter(b, b.servePad, at, b.home, 0);
+        if (b.mode === "home") {
+          b.fresh = true;
+          this.enter(b, b.servePad, at, b.home, 0, b.serveStride ?? undefined);
+        }
       }
       let guard = 0;
       while (b.hop && guard++ < 48) {
@@ -389,9 +491,15 @@ export class Engine {
       };
     }
 
+    if (b.fresh) {
+      b.fresh = false;
+      b.course = { pad: hop.pad, stride: { ...b.stride }, t };
+    }
+
     if (b.homing) {
       this.flyHome(b, t, b.cell, 0);
     } else if (b.target >= 0) {
+      b.fresh = true;
       this.throwTo(b, b.target, t);
     } else if (this.bounce >= 1) {
       // lossless: stay on the lattice and on the grid
@@ -407,6 +515,8 @@ export class Engine {
       if (d * this.S < SETTLE) {
         b.mode = "rest";
         b.hop = null;
+        // at rest it is simply here
+        b.course = { pad: cellPad(b.cell), stride: { x: 0, y: 0 }, t };
         b.fx.push({ t, kind: "settle", pad: cellPad(b.cell), nx: 0, ny: 0, power: 0.3 });
         return;
       }
