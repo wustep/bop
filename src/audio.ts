@@ -30,6 +30,7 @@ function rng(seed: number) {
 
 interface Live {
   kill: GainNode;
+  start: number;
   end: number;
 }
 
@@ -321,11 +322,48 @@ export class Sound {
     const list = this.live[voice];
     const now = ctx.currentTime;
     for (let i = list.length - 1; i >= 0; i--) if (list[i].end < now) list.splice(i, 1);
-    list.push({ kill, end });
+    list.push({ kill, start: t, end });
     while (list.length > STRIPS[voice].max) {
       const old = list.shift()!;
       old.kill.gain.setTargetAtTime(0, t, 0.015);
     }
+  }
+
+  /**
+   * Take back a note that was scheduled for `when` and has not started yet:
+   * the ball it belonged to was caught before it could land.
+   */
+  hush(voice: number, when: number) {
+    const now = this.ctx.currentTime;
+    const list = this.live[voice];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const l = list[i];
+      if (l.start <= now || l.start < when - 0.005) continue;
+      list.splice(i, 1);
+      l.kill.gain.cancelScheduledValues(0);
+      l.kill.gain.value = 0;
+      // anything it was going to damp or steal from rings on instead
+      for (const o of list) if (o.start < l.start) o.kill.gain.cancelScheduledValues(l.start - 0.001);
+    }
+  }
+
+  /** a ball stopping in a hand: a soft, dry pat, lower for the bigger ball */
+  pat(voice: number, power: number) {
+    const ctx = this.ctx;
+    const t = ctx.currentTime + 0.002;
+    const f = [150, 215, 300][voice];
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(f, t);
+    o.frequency.exponentialRampToValueAtTime(f * 0.6, t + 0.05);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.12 * power, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0002, t + 0.07);
+    g.gain.linearRampToValueAtTime(0, t + 0.08);
+    o.connect(g).connect(this.strips[LO]);
+    o.start(t);
+    o.stop(t + 0.09);
+    this.knock(t, this.strips[LO], 0.07 * power, f * 6, 0.9, 0.018);
   }
 
   /** ball against the tray wall: a dry little tock */

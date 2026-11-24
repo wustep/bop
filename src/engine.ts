@@ -35,6 +35,8 @@ const SETTLE = 0.05;
 const FLICK = 3;
 /** throw speed (cells/s) that buys one more cell of stride */
 const FLICK_PER_CELL = 7;
+/** steps between landings for a ball bouncing on the spot: a dribble in eighths */
+const DRIBBLE = 2;
 
 export interface WallHit {
   t: number;
@@ -110,10 +112,14 @@ export interface Hooks {
   land(ball: Ball, pad: number, when: number, vel: number): void;
   wall(ball: Ball, when: number, power: number, x: number): void;
   home(ball: Ball, when: number): void;
+  /** a landing already announced for `when` is not going to happen after all */
+  hush?(ball: Ball, when: number): void;
 }
 
 const mod = (a: number, n: number) => ((a % n) + n) % n;
 const cheb = (v: Vec) => Math.max(Math.abs(v.x), Math.abs(v.y));
+/** how many steps a hop of this stride takes */
+const stepsOf = (s: Vec) => cheb(s) || DRIBBLE;
 const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v);
 
 /** reflect an unbounded coordinate into the tray, walls half a cell past the edge wells */
@@ -240,13 +246,17 @@ export class Engine {
     this.flyHome(b, sv, { x: p.x, y: p.y }, p.z);
   }
 
-  /** a hand takes the ball: it leaves the simulation and goes where it is carried */
+  /**
+   * A hand takes the ball: it leaves the simulation and goes where it is
+   * carried. Works on a ball in any state, so one in flight can be caught.
+   */
   hold(id: number, at: Vec) {
     const b = this.balls[id];
     b.serveAt = -1;
     b.target = -1;
     b.homing = false;
     b.fx.length = 0;
+    this.unsay(b);
     b.hop = null;
     b.prev = null;
     b.mode = "held";
@@ -287,7 +297,7 @@ export class Engine {
       s.x = Math.round((vel.x / speed) * n);
       s.y = Math.round((vel.y / speed) * n);
     }
-    const d = Math.max(1, cheb(s));
+    const d = stepsOf(s);
     const within = at.x >= -0.5 && at.x <= W - 0.5 && at.y >= -0.5 && at.y <= H - 0.5;
     if (within) {
       b.stride = s;
@@ -386,7 +396,7 @@ export class Engine {
     } else if (this.bounce >= 1) {
       // lossless: stay on the lattice and on the grid
       const s = { x: Math.round(b.stride.x), y: Math.round(b.stride.y) };
-      const d = Math.max(1, cheb(s));
+      const d = stepsOf(s);
       b.stride = s;
       b.dur = d;
       this.gridHop(b, b.cell, s, t, this.quantize(b, t + d), d);
@@ -410,7 +420,7 @@ export class Engine {
   private throwTo(b: Ball, pad: number, t0: number) {
     const p = padCell(pad);
     const s = { x: p.x - b.cell.x, y: p.y - b.cell.y };
-    const d = Math.max(1, cheb(s));
+    const d = stepsOf(s);
     b.target = -1;
     b.stride = s;
     b.dur = d;
@@ -422,7 +432,7 @@ export class Engine {
     const p = padCell(pad);
     const s = stride ?? { x: Math.round(p.x - from.x), y: Math.round(p.y - from.y) };
     if (!stride && s.x === 0 && s.y === 0) s.y = 1;
-    const d = Math.max(1, cheb(s));
+    const d = stepsOf(s);
     const t1 = this.quantize(b, t0 + d);
     b.mode = "fly";
     b.target = -1;
@@ -525,8 +535,15 @@ export class Engine {
 
   /** abandon the current hop at step `s` (its future effects never happen) */
   private cut(b: Ball, s: number) {
+    this.unsay(b);
     b.prev = b.hop;
     b.fx = b.fx.filter((f) => f.t <= s);
+  }
+
+  /** sounds are sent a little ahead of time; take back the one for a landing that is being abandoned */
+  private unsay(b: Ball) {
+    const hop = b.hop;
+    if (hop && hop.sent) this.hooks.hush?.(b, this.timeOf(hop.t1));
   }
 
   /**

@@ -13,7 +13,7 @@ A bouncing-ball instrument. Three rubber balls hop across a tray of sixteen dimp
 - **Tap a dimple.** It sounds, the ball flies there, and then it keeps going. Far taps make long, slow hops; near taps make quick ones.
 - **Tap again** to send it somewhere else. The yellow dot shows where it's headed.
 - **lo / mid / hi** choose which ball listens to you. Tap the lit one to call it home.
-- **Pick a ball up** when it's sitting still and flick it. Drop it gently and it bounces where it lands.
+- **Catch a ball.** Touch one in the air and it stops in your hand. Flick to throw it, or just let go and it dribbles where you set it down. A ball that's sitting still can be picked up the same way.
 - **▶** serves all three. **■** calls them all back.
 - **tempo** is how fast the balls travel. **bounce** is how much of each hop the next one keeps: all the way up they never stop, lower and they rattle to rest like a dropped ball. **tone** goes from soft to glassy. **scale** retunes the tray.
 
