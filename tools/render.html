@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>bop · render</title>
+    <style>
+      body { font: 12px/1.5 ui-monospace, Menlo, monospace; margin: 24px; background: #efede8; color: #18181a; }
+      h1 { font-size: 14px; margin: 0 0 4px; }
+      p { margin: 0 0 16px; color: #69665e; max-width: 70ch; }
+      table { border-collapse: collapse; }
+      th, td { padding: 3px 10px; text-align: right; white-space: nowrap; }
+      th { font-weight: 600; border-bottom: 1px solid #18181a; }
+      td:first-child, th:first-child, td:nth-child(2), th:nth-child(2) { text-align: left; }
+      td:nth-child(2) { color: #69665e; white-space: normal; max-width: 44ch; }
+      a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <h1>bop · offline renders</h1>
+    <p>
+      Each row is a scripted session played by the real engine through the real sound, rendered offline at 48 kHz.
+      Loudness is BS.1770 integrated. Bands are each band's share of the power, in dB. Phone is what is left above
+      300 Hz.
+    </p>
+    <table id="out">
+      <tr>
+        <th>scene</th><th>what</th><th>LUFS</th><th>peak</th><th>crest</th><th>clipped</th>
+        <th>sub</th><th>low</th><th>mid</th><th>presence</th><th>air</th><th>phone</th><th>centroid</th><th>corr</th><th></th>
+      </tr>
+    </table>
+    <script type="module">
+      import { render, wav, SCENES } from "./render.ts";
+      const out = document.getElementById("out");
+      const only = new URLSearchParams(location.search).get("scene");
+      for (const name of Object.keys(SCENES)) {
+        if (only && only !== name) continue;
+        const r = await render(name);
+        const s = r.stats;
+        const url = URL.createObjectURL(new Blob([wav(r.channels)], { type: "audio/wav" }));
+        const cells = [name, r.about, s.lufs, s.peak, s.crest, s.clipped, s.bands.sub, s.bands.low, s.bands.mid,
+          s.bands.presence, s.bands.air, s.phone, s.centroid, s.corr];
+        const tr = out.insertRow();
+        for (const c of cells) tr.insertCell().textContent = String(c);
+        tr.insertCell().innerHTML = `<a href="${url}" download="bop-${name}.wav">wav</a>`;
+      }
+      document.title = "bop · render · done";
+    </script>
+  </body>
+</html>
