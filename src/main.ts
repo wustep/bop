@@ -108,6 +108,7 @@ function firstTouch() {
   if (touched) return;
   touched = true;
   tag.classList.add("gone");
+  stage.ready();
 }
 
 /** a finger on a pad: it sounds now, and the selected ball heads there */

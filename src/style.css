@@ -206,9 +206,9 @@ button:focus {
   position: relative;
   display: block;
   border-radius: 50%;
-  background: radial-gradient(circle at 63% 67%, #f8f7f3 0%, #efede8 40%, #e4e2dc 74%, #d9d7d1 100%);
+  background: radial-gradient(circle at 64% 68%, #f8f7f3 0%, #eeece7 38%, #e1dfd9 72%, #d3d1ca 100%);
   box-shadow:
-    inset calc(var(--u) * 2.2) calc(var(--u) * 3.2) calc(var(--u) * 4.5) rgba(var(--shade), 0.3),
+    inset calc(var(--u) * 2.4) calc(var(--u) * 3.4) calc(var(--u) * 5) rgba(var(--shade), 0.36),
     inset calc(var(--u) * -1.4) calc(var(--u) * -2) calc(var(--u) * 2.4) rgba(255, 255, 255, 0.95),
     calc(var(--u) * 0.8) calc(var(--u) * 1) calc(var(--u) * 0.5) rgba(255, 255, 255, 0.95),
     calc(var(--u) * -0.5) calc(var(--u) * -0.6) calc(var(--u) * 0.5) rgba(var(--shade), 0.1);
@@ -553,6 +553,48 @@ button:focus {
 .knob:focus-visible .knob-body {
   outline: calc(var(--u) * 2) solid var(--ink);
   outline-offset: calc(var(--u) * 3);
+}
+
+/* ── phone on its side: tray left, controls right ─────────────────────── */
+
+@media (orientation: landscape) and (max-height: 540px) {
+  .stage {
+    --u: min(calc((100vw - 16px) / 612), calc((100svh - 16px) / 396), 1.3px);
+  }
+  .device {
+    --dw: 612;
+    width: calc(var(--u) * 612);
+    display: grid;
+    grid-template-columns: calc(var(--u) * 356) 1fr;
+    grid-template-rows: auto auto 1fr;
+    column-gap: calc(var(--u) * 16);
+  }
+  .tray {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+  .top {
+    grid-column: 2;
+    margin: 0 calc(var(--u) * 6) calc(var(--u) * 6);
+  }
+  .dock,
+  .knobs {
+    grid-column: 2;
+    grid-template-columns: repeat(2, 1fr);
+    padding: 0;
+    margin-top: 0;
+    height: auto;
+  }
+  .dock {
+    grid-auto-rows: calc(var(--u) * 78);
+  }
+  .knobs {
+    align-content: end;
+  }
+  .ctl {
+    padding-top: calc(var(--u) * 10);
+    row-gap: calc(var(--u) * 6);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

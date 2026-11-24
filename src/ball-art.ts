@@ -162,7 +162,7 @@ export function drawBall(
   }
   void n;
   g.lineWidth = Math.max(0.6, R * 0.035);
-  g.strokeStyle = "rgba(255,255,255,0.075)";
+  g.strokeStyle = "rgba(255,255,255,0.06)";
   g.stroke();
 
   // pips, foreshortened toward the limb

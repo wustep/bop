@@ -34,12 +34,35 @@ const LIFT = {
   shadowY: 0.5,
 };
 
+const SHADE = {
+  contact: 0.72, // sprite scale when the ball is sitting (sprite is 3r wide)
+  spread: 0.46, // growth per cell of height
+  dark: 0.92,
+  fade: 2.2,
+};
+
 const IMPACT = {
   swell: 0.11,
   pinch: 0.2,
   stiffness: 1900, // spring that rings the squash back out
   damping: 30,
   spin: 0.7, // fraction of rolling-without-slipping
+};
+
+/* ── entrance storyboard ──────────────────────────────────────────────────
+ *    0ms   slab fades up (css)
+ *  300ms   low ball falls into its nest, bounces twice, settles
+ *  420ms   mid ball
+ *  540ms   high ball
+ * Any touch skips it.
+ * ───────────────────────────────────────────────────────────────────────── */
+const DROP = {
+  delay: 0.3, // s before the first ball
+  stagger: 0.12, // s between balls
+  height: 1.9, // cells it falls from
+  fall: 0.3, // s to fall that far
+  bounce: 0.4, // restitution
+  fade: 0.1, // s to fade in at the top of the fall
 };
 
 const DIP: Keyframe[] = [
@@ -71,7 +94,14 @@ interface BallView {
   hopT: number;
   key: string;
   zi: number;
-  wasAir: boolean;
+  /** entrance: clock time the ball drops in (-1 once it has landed), impacts so far */
+  dropT: number;
+  drops: number;
+  alpha: number;
+  // this frame
+  px: number;
+  py: number;
+  z: number;
 }
 
 export class Stage {
@@ -148,7 +178,12 @@ export class Stage {
         hopT: -1,
         key: "",
         zi: -1,
-        wasAir: false,
+        dropT: this.reduced ? -1 : DROP.delay + DROP.stagger * this.views.length,
+        drops: 0,
+        alpha: -1,
+        px: 0,
+        py: 0,
+        z: 0,
       });
     }
 
@@ -238,16 +273,86 @@ export class Stage {
     el.animate(DIP, { duration: 240 + 80 * power, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" });
   }
 
-  render(sVis: number, now: number, dt: number) {
-    const e = this.engine;
-    for (let i = 0; i < e.balls.length; i++) this.renderBall(e.balls[i], this.views[i], sVis, now, dt);
+  /** cancel the entrance (the user is already playing) */
+  ready() {
+    for (const v of this.views) v.dropT = -1;
   }
 
-  private renderBall(b: Ball, v: BallView, sVis: number, now: number, dt: number) {
+  render(sVis: number, now: number, dt: number) {
+    const balls = this.engine.balls;
+    const views = this.views;
+    for (let i = 0; i < balls.length; i++) this.locate(balls[i], views[i], sVis, now);
+
+    // two balls cannot share a dimple: near the ground they nestle side by side
+    for (let i = 0; i < views.length; i++) {
+      for (let j = i + 1; j < views.length; j++) {
+        const a = views[i];
+        const b = views[j];
+        const near = (1 - Math.min(1, a.z / 0.4)) * (1 - Math.min(1, b.z / 0.4));
+        if (near <= 0) continue;
+        const min = (a.r + b.r) * 0.94;
+        let dx = b.px - a.px;
+        let dy = b.py - a.py;
+        let d = Math.hypot(dx, dy);
+        if (d >= min) continue;
+        if (d < 0.5) {
+          const ang = 0.5 + (i + j) * 2.1;
+          dx = Math.cos(ang);
+          dy = Math.sin(ang);
+          d = 1;
+        }
+        const push = ((min - Math.hypot(b.px - a.px, b.py - a.py)) * near) / d;
+        const wa = b.r / (a.r + b.r);
+        a.px -= dx * push * wa;
+        a.py -= dy * push * wa;
+        b.px += dx * push * (1 - wa);
+        b.py += dy * push * (1 - wa);
+      }
+    }
+
+    for (let i = 0; i < balls.length; i++) this.paint(views[i], dt);
+  }
+
+  /** where the ball is this frame, plus everything that happens on the way */
+  private locate(b: Ball, v: BallView, sVis: number, now: number) {
     const p = this.engine.pose(b, sVis, this.pose);
-    const px = this.x0 + p.x * this.c;
-    const py = this.y0 - p.y * this.c;
+    v.px = this.x0 + p.x * this.c;
+    v.py = this.y0 - p.y * this.c;
     let z = p.z;
+    let alpha = 1;
+
+    // entrance: fall in from above and rattle to rest
+    if (v.dropT >= 0) {
+      let t = now - v.dropT;
+      if (t < 0) {
+        alpha = 0;
+      } else if (t < DROP.fall) {
+        const k = t / DROP.fall;
+        z += DROP.height * (1 - k * k);
+        alpha = Math.min(1, t / DROP.fade);
+      } else {
+        t -= DROP.fall;
+        let n = 1;
+        let dur = 2 * DROP.fall * DROP.bounce;
+        while (n <= 3 && t > dur) {
+          t -= dur;
+          n++;
+          dur *= DROP.bounce;
+        }
+        if (v.drops < Math.min(n, 3)) {
+          v.drops = Math.min(n, 3);
+          const power = Math.pow(DROP.bounce, n - 1);
+          v.swell = IMPACT.swell * power;
+          v.swellV = 0;
+          this.dip(this.nests[b.id], power);
+        }
+        if (n > 3) v.dropT = -1;
+        else {
+          const k = t / dur;
+          z += DROP.height * Math.pow(DROP.bounce, 2 * n) * 4 * k * (1 - k);
+        }
+      }
+    }
 
     // acknowledging hop (visual only)
     if (v.hopT >= 0) {
@@ -255,10 +360,14 @@ export class Stage {
       if (k >= 1) {
         v.hopT = -1;
         v.swell = IMPACT.swell * 0.6;
+        v.swellV = 0;
       } else z += 0.36 * 4 * k * (1 - k);
     }
-    z = Math.min(z, LIFT.maxZ);
-    const air = z > 0.001;
+    v.z = Math.min(z, LIFT.maxZ);
+    if (alpha !== v.alpha) {
+      v.alpha = alpha;
+      v.canvas.style.opacity = String(alpha);
+    }
 
     // things that happen when the picture (not the engine) reaches them
     if (b.fx.length) {
@@ -285,10 +394,18 @@ export class Stage {
           this.dip(this.nests[b.id], 0.6);
         } else if (f.kind === "settle") {
           v.swell = IMPACT.swell * 0.3;
+          v.swellV = 0;
         }
       }
       b.fx.length = kept;
     }
+  }
+
+  private paint(v: BallView, dt: number) {
+    const px = v.px;
+    const py = v.py;
+    const z = v.z;
+    const air = z > 0.001;
 
     // squash rings out on a spring
     const step = Math.min(dt, 0.034);
@@ -354,11 +471,10 @@ export class Stage {
     }
 
     // shadow: tight and dark in contact, sliding away and softening with height
-    const sScale = 0.84 + 0.4 * z + swell * 0.6;
-    const sx = px + v.r * 0.15 + z * this.c * LIFT.shadowX - v.shadowSize / 2;
-    const sy = py + v.r * 0.21 + z * this.c * LIFT.shadowY - v.shadowSize / 2;
+    const sScale = SHADE.contact + SHADE.spread * z + swell * 0.6;
+    const sx = px + v.r * 0.14 + z * this.c * LIFT.shadowX - v.shadowSize / 2;
+    const sy = py + v.r * 0.2 + z * this.c * LIFT.shadowY - v.shadowSize / 2;
     v.shadow.style.transform = `translate3d(${sx.toFixed(2)}px,${sy.toFixed(2)}px,0) scale(${sScale.toFixed(3)})`;
-    v.shadow.style.opacity = (0.9 / (1 + 2.4 * z)).toFixed(3);
-    v.wasAir = air;
+    v.shadow.style.opacity = ((SHADE.dark * v.alpha) / (1 + SHADE.fade * z)).toFixed(3);
   }
 }

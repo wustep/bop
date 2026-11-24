@@ -472,7 +472,7 @@ export class Engine {
 
   /** a longer fall lands harder */
   private velocity(d: number): number {
-    return clamp(0.34 + 0.56 * Math.pow(d, 0.6), 0.3, 1);
+    return clamp(0.2 + 0.7 * Math.pow(d, 0.7), 0.2, 1);
   }
 
   /** apex height in cells for a hop lasting `seconds` */
