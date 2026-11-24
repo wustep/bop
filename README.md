@@ -24,9 +24,11 @@ Keyboard: `1234` `QWER` `ASDF` `ZXCV` are the dimples, `J` `K` `L` choose a ball
 ```bash
 pnpm install
 pnpm dev
-pnpm test    # fuzzes the bounce engine
+pnpm test    # fuzzes the bounce engine, checks the meter
 pnpm build
 ```
+
+To judge the sound without ears, run `pnpm dev` and open `/tools/render.html`: it renders scripted sessions offline and reports loudness, peak and where the power sits, with a WAV of each.
 
 Vite + TypeScript, no framework. Sound is Web Audio FM synthesis, no samples. The design reference is `docs/inspo.jpg`; notes on what shipped are in [SHIPPED.md](SHIPPED.md).
 

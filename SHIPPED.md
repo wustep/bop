@@ -30,7 +30,7 @@ Other names considered were `pips`, `dimple` and `pogo`. Other concepts consider
 ## What was checked, and how
 
 - `pnpm test`: 400 random sessions of taps, recalls, pick-ups and throws. No ball passes a wall, no position goes non-finite, and balls in flight together always share one sixteenth-note grid.
-- Sound was measured, not heard. An offline render of a scripted session peaks at -2.2 dBFS with no flat-topped samples, at about -13 LUFS.
+- Sound is measured, not heard. `tools/render.html` plays scripted sessions through the real engine and the real sound in an offline context and meters each one (BS.1770 loudness, peak, band shares, onsets); the meter is itself tested against signals with known readings. The play key at 96 bpm renders at -12.3 LUFS, peaking at -1.9 dBFS, with 0.003% of samples deep in the soft clipper.
 - Under 4x CPU throttling at 390x844 @3x in Chrome, three balls playing held 60fps (worst frame 18.6 ms, script under 1% of the frame).
 - `docs/bop.mp4` is a frame-exact capture: the real app driven by a fake clock, with its audio rendered from the same clock, so picture and sound line up.
 
@@ -39,11 +39,11 @@ Other names considered were `pips`, `dimple` and `pogo`. Other concepts consider
 - **Nobody has listened to it.** I can't hear, so the voices were designed from synthesis knowledge and checked by measurement. Balance, the echo level and the top of the `tone` range want a pair of ears.
 - **Not run on a real phone.** The iOS unlock path (resume on touchend, `audioSession = "playback"` for the silent switch, the same nudge after an interruption) is written to the platform rules and checked in desktop WebKit, but untested on a device.
 - On a touch screen the very first note sounds as the finger lifts, not as it lands. That is the browser's rule, not a choice: `touchstart` and `pointerdown` do not count as the gesture that lets audio start, `touchend` does. Every note after that first lift sounds on the way down. The audio graph is now built at load, so the first touch only has to start it (about 85 ms of work moved out of that touch, measured in Chrome).
-- A tap sounds twice: once under the finger, once when the ball arrives. That is deliberate (the ball answers you) but it may feel busy at fast tempos.
+- A tap still sounds twice, but no longer as two equal notes: the finger is a quiet touch (about 9 dB down, duller, half as long, no echo) and the ball that arrives plays the note. Whether 9 dB is the right distance is a guess until someone listens.
 - A tap that lands squarely on a flying ball catches it instead of playing the pad under it. That is the rule (touch a ball and you have it), but in a busy pattern it will sometimes happen by accident. A touch that is only near a ball, and nearer the middle of a well, is left as a tap.
 - Two balls in one dimple nestle side by side, but in the air they pass through each other.
-- Echo time follows `tempo`, so turning the knob bends the pitch of echoes already ringing.
-- The compressor adds about 6 ms of lookahead to every note.
+- The echo catches up with a new tempo about a fifth of a second after the knob comes to rest, not while it is turning.
+- `tone` now reaches much further than it did (57–82% in spectral centroid, from 11–15%). The top of it was set by numbers, so it may be brighter than is pleasant.
 - The root is fixed at C.
 
 ## Suggested next steps
@@ -57,3 +57,4 @@ Other names considered were `pips`, `dimple` and `pogo`. Other concepts consider
 ## Passes since the first ship
 
 1. **Touch.** A ball can be caught out of the air, by either hand at once. The audio graph is built before the first touch. On a tall phone the slab grows into the spare height; on its side the controls run in two columns that line up with the tray's rows. CI runs the tests and the build on every pull request.
+2. **Sound.** Judged by offline renders, before against after. The echo no longer bends pitch when the tempo moves (it was sliding over an octave). The note under a finger is a quiet touch instead of a second full note. `tone` reaches five times further. The low ball keeps a second and third harmonic so a phone speaker can play it (its loudness through a phone-shaped filter went from 7.8 LU under the mid ball to 5.1). A tenth of the output power was below 30 Hz, where nothing can hear it; that is gone. Landings are heard when they are seen instead of 6 ms later, and what a hand does skips the leveller's lookahead.

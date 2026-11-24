@@ -81,8 +81,8 @@ const FRESH = 600; // ms a note asked for while locked is still worth playing on
 interface Asked {
   voice: number;
   midi: number;
-  vel: number;
   pan: number;
+  level: number;
   at: number;
 }
 let asked: Asked | null = null;
@@ -111,7 +111,7 @@ function heard() {
   opened = true;
   const a = asked;
   asked = null;
-  if (a && performance.now() - a.at < FRESH) sound!.note(a.voice, a.midi, 0, a.vel, a.pan);
+  if (a && performance.now() - a.at < FRESH) sound!.touch(a.voice, a.midi, 0, a.pan, a.level);
 }
 
 function wake() {
@@ -139,10 +139,14 @@ for (const type of ["pointerdown", "pointerup", "touchend", "click", "keydown"])
 }
 build();
 
-/** a note from the hand: now if the audio is running, the moment it starts if it is not */
-function play(voice: number, midi: number, vel: number, pan: number) {
-  if (audible()) sound!.note(voice, midi, 0, vel, pan);
-  else asked = { voice, midi, vel, pan, at: performance.now() };
+/**
+ * A note from the hand: now if the audio is running, the moment it starts if
+ * it is not. It is a touch, not a landing: quieter and shorter than the note
+ * the ball will play when it gets there, so a tap is not heard twice.
+ */
+function play(voice: number, midi: number, pan: number, level = 1) {
+  if (audible()) sound!.touch(voice, midi, 0, pan, level);
+  else asked = { voice, midi, pan, level, at: performance.now() };
 }
 
 document.addEventListener("visibilitychange", () => {
@@ -172,7 +176,7 @@ function firstTouch() {
 function strike(pad: number) {
   wake();
   firstTouch();
-  play(selected, midiOf(selected, pad), 0.92, panOf(pad));
+  play(selected, midiOf(selected, pad), panOf(pad));
   stage.aim(pad, selected);
   engine.tap(selected, pad, clock.now());
 }
@@ -196,7 +200,8 @@ function select(id: number) {
 
 function audition(id: number) {
   stage.nudge(id, clock.now());
-  play(id, voiceMidi(id, 0), 0.7, 0);
+  // nothing lands after this one, so it speaks up a little
+  play(id, voiceMidi(id, 0), 0, 1.4);
 }
 
 /** curated first throws: [low, mid, high] pads, picked so the three interlock */
@@ -415,6 +420,7 @@ playKey.addEventListener("click", (e) => {
 // ── knobs ──────────────────────────────────────────────────────────────────
 
 const knobs = document.getElementById("knobs")!;
+let echoTimer = 0;
 const bpmOf = (v: number) => Math.round(TEMPO.min + v * (TEMPO.max - TEMPO.min));
 /** the last stretch of the knob is a detent: lossless, forever */
 const bounceOf = (v: number) => (v >= 0.93 ? 1 : 0.45 + 0.5 * (v / 0.93));
@@ -425,7 +431,9 @@ new Knob(knobs, {
   format: (v) => String(bpmOf(v)),
   onChange: (v) => {
     engine.setTempo(bpmOf(v), clock.now());
-    sound?.setStep(engine.stepSeconds);
+    // the echo follows once the knob has come to rest (see Sound.setStep)
+    clearTimeout(echoTimer);
+    echoTimer = window.setTimeout(() => sound?.setStep(engine.stepSeconds), 180);
   },
 });
 new Knob(knobs, {
