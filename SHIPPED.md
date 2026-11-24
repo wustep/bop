@@ -33,7 +33,7 @@ Other names considered were `pips`, `dimple` and `pogo`. Other concepts consider
 - `pnpm test`: 400 random sessions of taps, recalls, pick-ups and throws. No ball passes a wall, no position goes non-finite, and balls in flight together always share one sixteenth-note grid.
 - Sound is measured, not heard. `tools/render.html` plays scripted sessions through the real engine and the real sound in an offline context and meters each one (BS.1770 loudness, peak, band shares, onsets); the meter is itself tested against signals with known readings. The play key at 96 bpm renders at -12.3 LUFS, peaking at -1.9 dBFS, with 0.003% of samples deep in the soft clipper.
 - Under 4x CPU throttling at 390x844 @3x in Chrome, three balls playing held 60fps (worst frame 18.6 ms, script under 1% of the frame).
-- `docs/bop.mp4` is a frame-exact capture: the real app driven by a fake clock, with its audio rendered from the same clock, so picture and sound line up.
+- `docs/bop-v2.mp4` is a frame-exact capture of production after the three passes: the real app driven by a stepped clock, with its audio rendered from the same clock, so picture and sound line up (a landing that sounds at 2.012 s is seated in its well on frame 121 of 60). `docs/bop.mp4` is the same thing from the first ship.
 
 ## Known rough spots
 

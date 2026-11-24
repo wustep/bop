@@ -4,9 +4,9 @@ A bouncing-ball instrument. Three rubber balls hop across a tray of sixteen dimp
 
 **Play it: https://bop-wustep.vercel.app**
 
-![bop](docs/bop.gif)
+![bop](docs/bop-v2.gif)
 
-[Watch it with sound](docs/bop.mp4) · [desktop](docs/desktop.png) · [phone](docs/phone.png)
+[Watch it with sound](docs/bop-v2.mp4) · [desktop](docs/desktop-v2.png) · [phone](docs/phone-v2.png)
 
 ## How to play
 
