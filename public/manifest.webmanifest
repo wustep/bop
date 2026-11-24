@@ -1,0 +1,14 @@
+{
+  "name": "bop",
+  "short_name": "bop",
+  "description": "A bouncing-ball instrument.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#cbc9c4",
+  "theme_color": "#cbc9c4",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}

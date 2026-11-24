@@ -1,0 +1,364 @@
+/**
+ * The picture: pads, nests, and the balls + their shadows.
+ *
+ * The device itself is static DOM/CSS. Only the balls move, and they move
+ * with transforms on their own layers, so a frame costs three tiny canvas
+ * redraws and six transform writes.
+ *
+ * ── impact storyboard (per landing) ──────────────────────────────────────
+ *    0ms   ball meets the well: swells 10%, shadow snaps tight
+ *    0ms   well dips (scale 0.93) and springs back over 300ms
+ *   ~140ms ball has rung down through one overshoot
+ * ─────────────────────────────────────────────────────────────────────────
+ */
+
+import { drawBall, pips, qarc, qaxis, qmul, qnorm, qrot, qslerp } from "./ball-art";
+import type { Quat, V3 } from "./ball-art";
+import { H, W } from "./engine";
+import type { Ball, Engine, Pose } from "./engine";
+import { noteName, padSemis } from "./scales";
+import type { Scale } from "./scales";
+
+/** radius in design units, pip count */
+const LOOKS = [
+  { r: 25, pips: 3, dot: 0.15, tilt: [-0.1, 0.12] },
+  { r: 19.5, pips: 2, dot: 0.17, tilt: [-0.16, 0.14] },
+  { r: 14.5, pips: 1, dot: 0.24, tilt: [-0.2, 0.18] },
+];
+
+const LIFT = {
+  seat: 0.97, // a resting ball sits a touch into its dimple
+  grow: 0.27, // scale gained per cell of height
+  maxZ: 2.1,
+  shadowX: 0.36, // shadow slides down-right as the ball rises (cells per cell)
+  shadowY: 0.5,
+};
+
+const IMPACT = {
+  swell: 0.11,
+  pinch: 0.2,
+  stiffness: 1900, // spring that rings the squash back out
+  damping: 30,
+  spin: 0.7, // fraction of rolling-without-slipping
+};
+
+const DIP: Keyframe[] = [
+  { transform: "scale(1)" },
+  { transform: "scale(0.93)", offset: 0.14 },
+  { transform: "scale(1.012)", offset: 0.55 },
+  { transform: "scale(1)" },
+];
+
+interface BallView {
+  canvas: HTMLCanvasElement;
+  g: CanvasRenderingContext2D;
+  shadow: HTMLElement;
+  r: number;
+  size: number;
+  shadowSize: number;
+  q: Quat;
+  rest: V3;
+  dots: V3[];
+  dot: number;
+  lx: number;
+  ly: number;
+  swell: number;
+  swellV: number;
+  pinch: number;
+  pinchV: number;
+  nx: number;
+  ny: number;
+  hopT: number;
+  key: string;
+  zi: number;
+  wasAir: boolean;
+}
+
+export class Stage {
+  readonly pads: HTMLButtonElement[] = [];
+  readonly homes: HTMLButtonElement[];
+  readonly tray: HTMLElement;
+  private wells: HTMLElement[] = [];
+  private notes: HTMLElement[] = [];
+  private nests: HTMLElement[];
+  private views: BallView[] = [];
+  private device: HTMLElement;
+  private pose: Pose = { x: 0, y: 0, z: 0 };
+  private reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /** px per cell, and the centre of pad (0,0) in device px */
+  c = 80;
+  x0 = 0;
+  y0 = 0;
+  private wall = 58;
+  private dpr = 1;
+
+  constructor(private engine: Engine) {
+    this.device = document.getElementById("device")!;
+    this.tray = document.getElementById("tray")!;
+    this.homes = [...document.querySelectorAll<HTMLButtonElement>(".home")];
+    this.nests = this.homes.map((h) => h.querySelector<HTMLElement>(".nest")!);
+
+    // pads: DOM order is top row first, index 0 is bottom-left
+    const made: HTMLButtonElement[] = [];
+    for (let row = H - 1; row >= 0; row--) {
+      for (let col = 0; col < W; col++) {
+        const pad = document.createElement("button");
+        pad.className = "pad";
+        pad.dataset.pad = String(row * W + col);
+        pad.innerHTML = `<span class="note"></span><span class="well"><i class="aim"></i></span>`;
+        this.tray.appendChild(pad);
+        made[row * W + col] = pad;
+      }
+    }
+    this.pads.push(...made);
+    this.wells = this.pads.map((p) => p.querySelector<HTMLElement>(".well")!);
+    this.notes = this.pads.map((p) => p.querySelector<HTMLElement>(".note")!);
+
+    const shadows = document.getElementById("shadows")!;
+    const balls = document.getElementById("balls")!;
+    for (const look of LOOKS) {
+      const shadow = document.createElement("div");
+      shadow.className = "shadow";
+      shadows.appendChild(shadow);
+      const canvas = document.createElement("canvas");
+      canvas.className = "ball";
+      balls.appendChild(canvas);
+      const l = Math.hypot(look.tilt[0], look.tilt[1], 1);
+      const rest: V3 = [look.tilt[0] / l, look.tilt[1] / l, -1 / l];
+      this.views.push({
+        canvas,
+        g: canvas.getContext("2d")!,
+        shadow,
+        r: look.r,
+        size: 0,
+        shadowSize: 0,
+        q: qarc([0, 0, -1], rest),
+        rest,
+        dots: pips(look.pips),
+        dot: look.dot,
+        lx: NaN,
+        ly: NaN,
+        swell: 0,
+        swellV: 0,
+        pinch: 0,
+        pinchV: 0,
+        nx: 1,
+        ny: 0,
+        hopT: -1,
+        key: "",
+        zi: -1,
+        wasAir: false,
+      });
+    }
+
+    new ResizeObserver(() => this.measure()).observe(this.device);
+    this.measure();
+  }
+
+  /** read the real geometry back out of the layout so CSS stays the source of truth */
+  measure() {
+    const dev = this.device.getBoundingClientRect();
+    if (dev.width === 0) return;
+    const u = dev.width / parseFloat(getComputedStyle(this.device).getPropertyValue("--dw") || "400");
+    const centre = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2 - dev.left, y: r.top + r.height / 2 - dev.top };
+    };
+    const p0 = centre(this.wells[0]);
+    const p1 = centre(this.wells[1]);
+    this.c = p1.x - p0.x;
+    this.x0 = p0.x;
+    this.y0 = p0.y;
+    const tray = this.tray.getBoundingClientRect();
+    this.wall = p0.x - (tray.left - dev.left);
+    this.dpr = Math.min(3, window.devicePixelRatio || 1);
+
+    this.views.forEach((v, i) => {
+      const look = LOOKS[i];
+      v.r = look.r * u;
+      const maxScale = LIFT.seat + LIFT.grow * LIFT.maxZ + IMPACT.swell + 0.04;
+      v.size = Math.ceil(v.r * 2 * maxScale + 6);
+      v.canvas.width = Math.round(v.size * this.dpr);
+      v.canvas.height = Math.round(v.size * this.dpr);
+      v.canvas.style.width = v.canvas.style.height = v.size + "px";
+      v.shadowSize = Math.ceil(v.r * 3);
+      v.shadow.style.width = v.shadow.style.height = v.shadowSize + "px";
+      v.key = "";
+      v.lx = NaN;
+
+      const b = this.engine.balls[i];
+      b.edge = (this.wall - v.r * 0.98) / this.c;
+      const h = centre(this.nests[i]);
+      this.engine.setHome(i, { x: (h.x - this.x0) / this.c, y: (this.y0 - h.y) / this.c });
+    });
+  }
+
+  /** which pad is under a client point, with a little slack; -1 if none */
+  padAt(clientX: number, clientY: number, slack = 0.5): number {
+    const dev = this.device.getBoundingClientRect();
+    const fx = (clientX - dev.left - this.x0) / this.c;
+    const fy = (this.y0 - (clientY - dev.top)) / this.c;
+    const col = Math.round(fx);
+    const row = Math.round(fy);
+    if (col < 0 || col >= W || row < 0 || row >= H) return -1;
+    if (Math.max(Math.abs(fx - col), Math.abs(fy - row)) > slack) return -1;
+    return row * W + col;
+  }
+
+  setScale(scale: Scale) {
+    this.pads.forEach((pad, i) => {
+      const semis = padSemis(i % W, Math.floor(i / W), scale);
+      const name = noteName(semis);
+      this.notes[i].textContent = name;
+      this.notes[i].classList.toggle("tonic", semis % 12 === 0);
+      pad.setAttribute("aria-label", name + (Math.floor(semis / 12) + 4));
+    });
+  }
+
+  press(pad: number, down: boolean) {
+    this.pads[pad].classList.toggle("down", down);
+  }
+
+  aim(pad: number) {
+    for (let i = 0; i < this.pads.length; i++) this.pads[i].classList.toggle("aimed", i === pad);
+  }
+
+  select(id: number) {
+    this.homes.forEach((h, i) => h.classList.toggle("on", i === id));
+  }
+
+  /** a small acknowledging hop in place */
+  nudge(id: number, now: number) {
+    this.views[id].hopT = now;
+  }
+
+  private dip(el: HTMLElement, power: number) {
+    if (this.reduced) return;
+    el.animate(DIP, { duration: 240 + 80 * power, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" });
+  }
+
+  render(sVis: number, now: number, dt: number) {
+    const e = this.engine;
+    for (let i = 0; i < e.balls.length; i++) this.renderBall(e.balls[i], this.views[i], sVis, now, dt);
+  }
+
+  private renderBall(b: Ball, v: BallView, sVis: number, now: number, dt: number) {
+    const p = this.engine.pose(b, sVis, this.pose);
+    const px = this.x0 + p.x * this.c;
+    const py = this.y0 - p.y * this.c;
+    let z = p.z;
+
+    // acknowledging hop (visual only)
+    if (v.hopT >= 0) {
+      const k = (now - v.hopT) / 0.26;
+      if (k >= 1) {
+        v.hopT = -1;
+        v.swell = IMPACT.swell * 0.6;
+      } else z += 0.36 * 4 * k * (1 - k);
+    }
+    z = Math.min(z, LIFT.maxZ);
+    const air = z > 0.001;
+
+    // things that happen when the picture (not the engine) reaches them
+    if (b.fx.length) {
+      let kept = 0;
+      for (let i = 0; i < b.fx.length; i++) {
+        const f = b.fx[i];
+        if (f.t > sVis) {
+          b.fx[kept++] = f;
+          continue;
+        }
+        if (f.kind === "land") {
+          v.swell = IMPACT.swell * (0.5 + 0.5 * f.power);
+          v.swellV = 0;
+          this.dip(this.wells[f.pad], f.power);
+          this.pads[f.pad].classList.remove("aimed");
+        } else if (f.kind === "wall") {
+          v.pinch = IMPACT.pinch * (0.5 + 0.5 * f.power);
+          v.pinchV = 0;
+          v.nx = f.nx;
+          v.ny = -f.ny;
+        } else if (f.kind === "home") {
+          v.swell = IMPACT.swell * 0.8;
+          v.swellV = 0;
+          this.dip(this.nests[b.id], 0.6);
+        } else if (f.kind === "settle") {
+          v.swell = IMPACT.swell * 0.3;
+        }
+      }
+      b.fx.length = kept;
+    }
+
+    // squash rings out on a spring
+    const step = Math.min(dt, 0.034);
+    if (v.swell !== 0 || v.swellV !== 0) {
+      v.swellV += (-IMPACT.stiffness * v.swell - IMPACT.damping * v.swellV) * step;
+      v.swell += v.swellV * step;
+      if (Math.abs(v.swell) < 0.0015 && Math.abs(v.swellV) < 0.05) v.swell = v.swellV = 0;
+    }
+    if (v.pinch !== 0 || v.pinchV !== 0) {
+      v.pinchV += (-IMPACT.stiffness * v.pinch - IMPACT.damping * v.pinchV) * step;
+      v.pinch += v.pinchV * step;
+      if (Math.abs(v.pinch) < 0.0015 && Math.abs(v.pinchV) < 0.05) v.pinch = v.pinchV = 0;
+    }
+    const swell = this.reduced ? 0 : v.swell;
+    const pinch = this.reduced ? 0 : v.pinch;
+
+    // spin: roll with the travel; at rest, rock round until the pips face up
+    if (!Number.isNaN(v.lx)) {
+      const dx = px - v.lx;
+      const dy = py - v.ly;
+      const dist = Math.hypot(dx, dy);
+      if (dist > 0.02 && dist < this.c * 2) {
+        v.q = qnorm(qmul(qaxis(dy / dist, -dx / dist, 0, (dist / v.r) * IMPACT.spin), v.q));
+      } else if (!air && dist <= 0.02) {
+        const pole = qrot(v.q, [0, 0, -1]);
+        const off = 1 - (pole[0] * v.rest[0] + pole[1] * v.rest[1] + pole[2] * v.rest[2]);
+        if (off > 0.0002) {
+          const goal = qmul(qarc(pole, v.rest), v.q);
+          v.q = qslerp(v.q, goal, 1 - Math.exp(-dt / 0.09));
+        }
+      }
+    }
+    v.lx = px;
+    v.ly = py;
+
+    // ball
+    const scale = LIFT.seat + LIFT.grow * z;
+    const half = v.size / 2;
+    v.canvas.style.transform = `translate3d(${(px - half).toFixed(2)}px,${(py - half).toFixed(2)}px,0)`;
+    const zi = 10 + Math.round(z * 12) + (air ? 4 : 0);
+    if (zi !== v.zi) {
+      v.zi = zi;
+      v.canvas.style.zIndex = String(zi);
+    }
+    const key =
+      scale.toFixed(3) +
+      swell.toFixed(3) +
+      pinch.toFixed(3) +
+      v.q[0].toFixed(3) +
+      v.q[1].toFixed(3) +
+      v.q[2].toFixed(3);
+    if (key !== v.key) {
+      v.key = key;
+      const g = v.g;
+      g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      g.clearRect(0, 0, v.size, v.size);
+      drawBall(g, half, half, v.r * scale, v.q, v.dots, v.dot, {
+        swell,
+        pinch,
+        nx: v.nx,
+        ny: v.ny,
+      });
+    }
+
+    // shadow: tight and dark in contact, sliding away and softening with height
+    const sScale = 0.84 + 0.4 * z + swell * 0.6;
+    const sx = px + v.r * 0.15 + z * this.c * LIFT.shadowX - v.shadowSize / 2;
+    const sy = py + v.r * 0.21 + z * this.c * LIFT.shadowY - v.shadowSize / 2;
+    v.shadow.style.transform = `translate3d(${sx.toFixed(2)}px,${sy.toFixed(2)}px,0) scale(${sScale.toFixed(3)})`;
+    v.shadow.style.opacity = (0.9 / (1 + 2.4 * z)).toFixed(3);
+    v.wasAir = air;
+  }
+}

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <title>bop</title>
+    <meta
+      name="description"
+      content="A bouncing-ball instrument. Three rubber balls, sixteen dimples. Tap a dimple and the ball keeps going."
+    />
+    <meta name="theme-color" content="#cbc9c4" />
+    <meta property="og:title" content="bop" />
+    <meta
+      property="og:description"
+      content="A bouncing-ball instrument. Three rubber balls, sixteen dimples."
+    />
+    <meta property="og:image" content="https://bop-wustep.vercel.app/og.jpg" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="bop" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+  </head>
+  <body>
+    <main class="stage">
+      <div class="device" id="device">
+        <header class="top">
+          <h1 class="mark" aria-label="bop">b<i class="mark-o"></i>p</h1>
+          <p class="tag" id="tag">tap a dimple</p>
+        </header>
+
+        <div class="tray" id="tray" role="group" aria-label="Pads"></div>
+
+        <div class="dock">
+          <button class="home" data-ball="0" aria-label="Low ball">
+            <span class="nest"></span><span class="who"><i class="led"></i>lo</span>
+          </button>
+          <button class="home" data-ball="1" aria-label="Mid ball">
+            <span class="nest"></span><span class="who"><i class="led"></i>mid</span>
+          </button>
+          <button class="home" data-ball="2" aria-label="High ball">
+            <span class="nest"></span><span class="who"><i class="led"></i>hi</span>
+          </button>
+          <button class="play" id="play" aria-label="Play" aria-pressed="false">
+            <span class="keycap"><i class="glyph"></i></span>
+          </button>
+        </div>
+
+        <div class="knobs" id="knobs"></div>
+
+        <div class="shadows" id="shadows" aria-hidden="true"></div>
+        <div class="balls" id="balls" aria-hidden="true"></div>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
