@@ -1,7 +1,7 @@
 /**
  * Fuzz the bounce engine: hundreds of random sessions of taps, recalls,
- * pick-ups, throws and knob turns, checking the things that must never
- * break no matter what a player does.
+ * pick-ups, mid-air catches, throws and knob turns, checking the things
+ * that must never break no matter what a player does.
  *
  *   pnpm test
  */
@@ -51,10 +51,10 @@ function session(seed: number, lossless: boolean, report: Report) {
       next = t + 0.15 + rnd() * 1.6;
       const id = Math.floor(rnd() * 3);
       const r = rnd();
-      const mode = e.balls[id].mode;
       if (r < 0.62) e.tap(id, Math.floor(rnd() * 16), t);
       else if (r < 0.72) e.recall(id, t);
-      else if (r < 0.9 && (mode === "home" || mode === "rest")) {
+      else if (r < 0.9) {
+        // a hand takes it, whatever it was doing: sitting, flying, heading home
         e.hold(id, { x: rnd() * 6 - 1.5, y: rnd() * 7 - 2 });
         const still = rnd() < 0.4;
         e.release(id, t, still ? { x: 0, y: 0 } : { x: (rnd() - 0.5) * 40, y: (rnd() - 0.5) * 40 }, 0.5);
@@ -134,4 +134,56 @@ test("with bounce below 1 the ball speeds up, quietens down, and comes to rest",
     assert.ok(gap < before, "each gap is shorter than the last");
     assert.ok(lands[i][1] <= lands[i - 1][1], "each landing is no louder than the last");
   }
+});
+
+test("a ball caught in flight goes quiet, and a still hand sets it down to dribble", () => {
+  const lands: [number, number][] = [];
+  const hushed: number[] = [];
+  const e = new Engine(
+    {
+      land: (_b, pad, when) => lands.push([when, pad]),
+      wall() {},
+      home() {},
+      hush: (_b, when) => hushed.push(when),
+    },
+    1,
+  );
+  e.setTempo(96, 0);
+  e.setHome(0, { x: 1, y: -1 });
+  const S = e.stepSeconds;
+  e.tap(0, 13, 0); // straight up the second column: four steps to the first landing
+  const first = 4 * S;
+  let t = 0;
+  for (; t < first - 0.05; t += 1 / 120) e.advance(t);
+  assert.equal(lands.length, 1, "the landing is announced a little ahead of time");
+
+  e.hold(0, { x: 1, y: 2 });
+  assert.equal(e.balls[0].mode, "held");
+  assert.deepEqual(hushed, [lands[0][0]], "the announced landing is taken back");
+  for (; t < 3; t += 1 / 120) e.advance(t);
+  assert.equal(lands.length, 1, "nothing lands while it is in the hand");
+
+  e.release(0, t, { x: 0, y: 0 }, 0.5);
+  for (; t < 6; t += 1 / 120) e.advance(t);
+  const after = lands.slice(1);
+  assert.ok(after.length >= 4, "it bounces where it was set down");
+  for (let i = 0; i < after.length; i++) {
+    assert.equal(after[i][1], 9, "always in the well under the hand");
+    if (i > 0) assert.ok(Math.abs((after[i][0] - after[i - 1][0]) / S - 2) < 1e-9, "one bounce every two steps");
+  }
+});
+
+test("a caught ball can be thrown: the flick sets its direction and its stride", () => {
+  const lands: number[] = [];
+  const e = new Engine({ land: (_b, pad) => lands.push(pad), wall() {}, home() {} }, 1);
+  e.setTempo(96, 0);
+  e.setHome(0, { x: 1, y: -1 });
+  e.tap(0, 5, 0);
+  let t = 0;
+  for (; t < 0.4; t += 1 / 120) e.advance(t);
+  e.hold(0, { x: 0, y: 1 });
+  lands.length = 0;
+  e.release(0, t, { x: 15, y: 0 }, 0.5); // a firm flick to the right: two wells a hop
+  for (; t < 3; t += 1 / 120) e.advance(t);
+  assert.deepEqual(lands.slice(0, 4), [6, 7, 5, 4], "across the row in twos, folding at the walls");
 });

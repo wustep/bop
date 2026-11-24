@@ -12,7 +12,7 @@ bop is a tray of sixteen dimples and three rubber balls. A ball crosses the tray
 - Tap a dimple. It sounds straight away, the listening ball flies there, then carries on the same way.
 - Tap again to re-aim it. A yellow dot marks where it is headed.
 - `lo` `mid` `hi` choose which ball listens. Tapping the lit one calls it home.
-- A ball that is sitting still can be picked up and flicked, or dropped into a dimple.
+- Any ball can be taken in the hand: one in the air is caught the moment it is touched, one sitting still is picked up with a drag. A flick throws it; a still hand sets it down, and it dribbles on the spot.
 - The key serves all three balls, or calls them all back.
 - Four knobs: `tempo` (ball speed), `bounce` (how much each hop keeps; at the top they never stop, below it they speed up and rattle to rest), `tone` (soft to glassy), `scale` (six tunings).
 - Keyboard: `1234 / QWER / ASDF / ZXCV` for the dimples, `J K L` for the balls, `space` for the key.
@@ -37,12 +37,11 @@ Other names considered were `pips`, `dimple` and `pogo`. Other concepts consider
 ## Known rough spots
 
 - **Nobody has listened to it.** I can't hear, so the voices were designed from synthesis knowledge and checked by measurement. Balance, the echo level and the top of the `tone` range want a pair of ears.
-- **Not run on a real phone.** The iOS unlock path (resume on touchend, `audioSession = "playback"` for the silent switch) is written to the platform rules but untested on a device. On touch the first note sounds on finger-up rather than finger-down, because that is the first moment a browser allows audio.
+- **Not run on a real phone.** The iOS unlock path (resume on touchend, `audioSession = "playback"` for the silent switch, the same nudge after an interruption) is written to the platform rules and checked in desktop WebKit, but untested on a device.
+- On a touch screen the very first note sounds as the finger lifts, not as it lands. That is the browser's rule, not a choice: `touchstart` and `pointerdown` do not count as the gesture that lets audio start, `touchend` does. Every note after that first lift sounds on the way down. The audio graph is now built at load, so the first touch only has to start it (about 85 ms of work moved out of that touch, measured in Chrome).
 - A tap sounds twice: once under the finger, once when the ball arrives. That is deliberate (the ball answers you) but it may feel busy at fast tempos.
-- Balls can only be picked up when still. A ball in flight can't be caught.
+- A tap that lands squarely on a flying ball catches it instead of playing the pad under it. That is the rule (touch a ball and you have it), but in a busy pattern it will sometimes happen by accident. A touch that is only near a ball, and nearer the middle of a well, is left as a tap.
 - Two balls in one dimple nestle side by side, but in the air they pass through each other.
-- The landscape-phone layout works but got less attention than portrait.
-- On tall phones the slab doesn't use the spare height.
 - Echo time follows `tempo`, so turning the knob bends the pitch of echoes already ringing.
 - The compressor adds about 6 ms of lookahead to every note.
 - The root is fixed at C.
@@ -50,8 +49,11 @@ Other names considered were `pips`, `dimple` and `pogo`. Other concepts consider
 ## Suggested next steps
 
 1. Play it on an iPhone with headphones and with the speaker, and retune levels by ear.
-2. Catch a ball mid-flight.
-3. Let balls knock into each other, with a clack.
-4. A share link that encodes the three throws and the knob positions.
-5. A root-note control, perhaps as a second function of the `scale` knob.
-6. Web MIDI out, one channel per ball.
+2. Let balls knock into each other, with a clack.
+3. A share link that encodes the three throws and the knob positions.
+4. A root-note control, perhaps as a second function of the `scale` knob.
+5. Web MIDI out, one channel per ball.
+
+## Passes since the first ship
+
+1. **Touch.** A ball can be caught out of the air, by either hand at once. The audio graph is built before the first touch. On a tall phone the slab grows into the spare height; on its side the controls run in two columns that line up with the tray's rows. CI runs the tests and the build on every pull request.

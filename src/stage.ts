@@ -44,7 +44,10 @@ const SHADE = {
 const HOLD = {
   lift: 0.5, // cells above the surface while carried
   rise: 0.045, // s time constant of the pick-up
-  reach: 7, // px of slack around a ball when grabbing it
+  reach: 7, // px of slack around a sitting ball when grabbing it
+  halo: 6, // px of slack around a flying one, for a mouse
+  haloTouch: 14, // ...and for a finger, which is blunter and later
+  catch: 0.6, // how much of a landing's squash a catch gives
 };
 
 const IMPACT = {
@@ -274,6 +277,11 @@ export class Stage {
     for (let i = 0; i < this.pads.length; i++) this.pads[i].classList.toggle("aimed", i === pad);
   }
 
+  /** the ball that was heading somewhere is not going there any more */
+  unaim(ball: number) {
+    if (ball === this.aimBall) this.aim(-1);
+  }
+
   select(id: number) {
     this.homes.forEach((h, i) => h.classList.toggle("on", i === id));
   }
@@ -288,23 +296,54 @@ export class Stage {
     el.animate(DIP, { duration: 240 + 80 * power, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" });
   }
 
-  /** a resting ball under a client point, or -1. Balls in flight cannot be grabbed. */
-  ballAt(clientX: number, clientY: number): number {
+  /**
+   * The ball under a client point, or -1. One in the air counts (it can be
+   * caught) and, being on top, wins over one sitting beneath it.
+   *
+   * A moving ball is hard to hit, so it has a halo of forgiveness round it.
+   * But a touch in the halo that is nearer the middle of a well than it is
+   * to the ball was meant for the well, and is left alone.
+   */
+  ballAt(clientX: number, clientY: number, touch = false): number {
     const dev = this.device.getBoundingClientRect();
     const x = clientX - dev.left;
     const y = clientY - dev.top;
+    const fx = (x - this.x0) / this.c;
+    const fy = (this.y0 - y) / this.c;
+    const onTray = fx > -0.5 && fx < W - 0.5 && fy > -0.5 && fy < H - 0.5;
+    const toWell = onTray ? Math.hypot(fx - Math.round(fx), fy - Math.round(fy)) * this.c : Infinity;
     let best = -1;
+    let bestZ = -1;
     let bestD = Infinity;
     this.engine.balls.forEach((b, i) => {
-      if (b.mode !== "home" && b.mode !== "rest") return;
+      if (b.mode === "held") return;
       const v = this.views[i];
+      if (v.alpha <= 0) return;
       const d = Math.hypot(x - v.px, y - v.py);
-      if (d <= v.r + HOLD.reach && d < bestD) {
+      const body = v.r * (LIFT.seat + LIFT.grow * v.z);
+      if (b.mode === "fly") {
+        if (d > body + (touch ? HOLD.haloTouch : HOLD.halo)) return;
+        if (d > body && d > toWell) return;
+      } else if (d > body + HOLD.reach) return;
+      if (v.z > bestZ + 0.05 || (v.z > bestZ - 0.05 && d < bestD)) {
         best = i;
+        bestZ = v.z;
         bestD = d;
       }
     });
     return best;
+  }
+
+  /** a hand closes on the ball where it is: it keeps its height and gives a little */
+  take(id: number) {
+    const v = this.views[id];
+    v.lift = v.z;
+    v.hopT = -1;
+    v.dropT = -1;
+    if (v.z > 0.05) {
+      v.swell = IMPACT.swell * HOLD.catch;
+      v.swellV = 0;
+    }
   }
 
   /** device px of a ball's centre this frame */

@@ -11,6 +11,12 @@
  *
  * All sizes are multiples of --u, the design unit (the device is 400u wide),
  * so the whole object scales to fit any screen without a transform.
+ *
+ * Three bodies, one instrument:
+ *   desktop / tablet   400 x 624u, fixed proportions
+ *   tall phone         400u wide, and the slab grows to use the height: the
+ *                      parts stay the same size, the gaps between them open up
+ *   phone on its side  tray left, a column of balls and a column of knobs right
  */
 
 @font-face {
@@ -78,7 +84,10 @@ button:focus {
 }
 
 .stage {
-  --u: min(calc((100vw - 16px) / 400), calc((100vh - 16px) / 624), 1.3px);
+  /* the room there is, inside the notch, the home bar and an 8px margin */
+  --aw: calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));
+  --ah: calc(100vh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  --u: min(calc(var(--aw) / 400), calc(var(--ah) / 624), 1.3px);
   position: fixed;
   inset: 0;
   display: grid;
@@ -90,7 +99,7 @@ button:focus {
 /* fit inside the phone's toolbars where the browser can tell us about them */
 @supports (height: 100svh) {
   .stage {
-    --u: min(calc((100vw - 16px) / 400), calc((100svh - 16px) / 624), 1.3px);
+    --ah: calc(100svh - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   }
 }
 
@@ -584,49 +593,73 @@ button:focus {
   outline-offset: calc(var(--u) * 3);
 }
 
-/* ── phone on its side: tray left, controls right ─────────────────────── */
+/* ── tall phone: the slab grows into the height ───────────────────────── */
+/* Width is what limits a phone held upright, so there is height to spare.
+   The slab takes up to 17% more of it. Nothing gets bigger; the header, the
+   tray, the balls and the knobs just get more room between them. */
+
+@media (max-aspect-ratio: 5 / 8) {
+  .device {
+    display: grid;
+    grid-template-rows: auto 0.5fr auto 1.25fr auto 1fr auto;
+    min-height: min(var(--ah), calc(var(--u) * 730));
+  }
+  .top {
+    grid-row: 1;
+  }
+  .tray {
+    grid-row: 3;
+  }
+  .dock {
+    grid-row: 5;
+  }
+  .knobs {
+    grid-row: 7;
+  }
+}
+
+/* ── phone on its side: tray left, balls and knobs in two columns right ── */
+/* The four rows of the tray set the rhythm: lo / mid / hi / key down one
+   column, the four knobs down the other. */
 
 @media (orientation: landscape) and (max-height: 540px) {
   .stage {
-    --u: min(calc((100vw - 16px) / 612), calc((100vh - 16px) / 396), 1.3px);
-  }
-  @supports (height: 100svh) {
-    .stage {
-      --u: min(calc((100vw - 16px) / 612), calc((100svh - 16px) / 396), 1.3px);
-    }
+    --u: min(calc(var(--aw) / 584), calc(var(--ah) / 396), 1.3px);
   }
   .device {
-    --dw: 612;
-    width: calc(var(--u) * 612);
+    --dw: 584;
+    width: calc(var(--u) * 584);
     display: grid;
-    grid-template-columns: calc(var(--u) * 356) 1fr;
-    grid-template-rows: auto auto 1fr;
-    column-gap: calc(var(--u) * 16);
+    grid-template-columns: calc(var(--u) * 356) 1fr 1fr;
+    grid-template-rows: auto 1fr;
+    column-gap: calc(var(--u) * 8);
   }
   .tray {
     grid-column: 1;
     grid-row: 1 / -1;
   }
   .top {
-    grid-column: 2;
-    margin: 0 calc(var(--u) * 6) calc(var(--u) * 6);
+    grid-column: 2 / -1;
+    margin: 0 calc(var(--u) * 10) calc(var(--u) * 6);
   }
   .dock,
   .knobs {
-    grid-column: 2;
-    grid-template-columns: repeat(2, 1fr);
+    grid-row: 2;
+    grid-template-columns: 1fr;
+    grid-template-rows: repeat(4, 1fr);
     padding: 0;
     margin-top: 0;
     height: auto;
   }
   .dock {
-    grid-auto-rows: calc(var(--u) * 78);
+    grid-column: 2;
   }
   .knobs {
-    align-content: end;
+    grid-column: 3;
   }
   .ctl {
-    padding-top: calc(var(--u) * 10);
+    align-content: center;
+    padding-top: calc(var(--u) * 6);
     row-gap: calc(var(--u) * 6);
   }
 }

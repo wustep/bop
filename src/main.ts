@@ -55,6 +55,9 @@ const engine = new Engine(
     home(_ball, when) {
       if (audible()) sound!.thud(audioTime(when), 0.7);
     },
+    hush(ball, when) {
+      if (audible()) sound!.hush(ball.id, audioTime(when));
+    },
   },
   3,
 );
@@ -64,18 +67,57 @@ const stage = new Stage(engine);
 stage.setScale(scale);
 stage.select(selected);
 
-// ── audio unlock ───────────────────────────────────────────────────────────
-// Created on the first gesture. iOS only honours some event types as a
-// gesture, so every plausible one tries to resume.
+// ── audio ──────────────────────────────────────────────────────────────────
+// The graph is built at load, while nothing is happening, so a first touch
+// has nothing to do but start it.
+//
+// A browser will not start audio on a touch screen until a finger *lifts*
+// (touchend / pointerup are gestures; touchstart / pointerdown are not). So
+// the very first note waits for that lift; from then on the context is
+// running and every touch sounds on the way down.
 
-function wake() {
-  if (!actx) {
-    const AC: typeof AudioContext =
-      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!AC) return;
+const FRESH = 600; // ms a note asked for while locked is still worth playing once unlocked
+
+interface Asked {
+  voice: number;
+  midi: number;
+  vel: number;
+  pan: number;
+  at: number;
+}
+let asked: Asked | null = null;
+/** the output has really run at least once */
+let opened = false;
+
+function build() {
+  if (actx) return;
+  const AC: typeof AudioContext =
+    window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  if (!AC) return;
+  try {
     actx = new AC({ latencyHint: "interactive" });
     sound = new Sound(actx, engine.stepSeconds);
     sound.tone = tone;
+    actx.addEventListener("statechange", heard);
+  } catch {
+    actx = null;
+    sound = null;
+  }
+}
+
+/** the context has (re)started: play what the finger asked for while it could not */
+function heard() {
+  if (!audible()) return;
+  opened = true;
+  const a = asked;
+  asked = null;
+  if (a && performance.now() - a.at < FRESH) sound!.note(a.voice, a.midi, 0, a.vel, a.pan);
+}
+
+function wake() {
+  build();
+  if (!actx) return;
+  if (!opened) {
     // one silent sample: older iOS only truly opens the output once something has played
     const blip = actx.createBufferSource();
     blip.buffer = actx.createBuffer(1, 1, actx.sampleRate);
@@ -88,10 +130,19 @@ function wake() {
       /* not supported */
     }
   }
-  if (actx.state !== "running") actx.resume().catch(() => {});
+  // "interrupted" (a call, Siri, the lock screen) needs the same nudge as "suspended"
+  if (actx.state !== "running") actx.resume().then(heard, () => {});
+  else heard();
 }
 for (const type of ["pointerdown", "pointerup", "touchend", "click", "keydown"]) {
   window.addEventListener(type, wake, { capture: true, passive: true });
+}
+build();
+
+/** a note from the hand: now if the audio is running, the moment it starts if it is not */
+function play(voice: number, midi: number, vel: number, pan: number) {
+  if (audible()) sound!.note(voice, midi, 0, vel, pan);
+  else asked = { voice, midi, vel, pan, at: performance.now() };
 }
 
 document.addEventListener("visibilitychange", () => {
@@ -108,6 +159,7 @@ document.addEventListener("visibilitychange", () => {
 
 const tag = document.getElementById("tag")!;
 const playKey = document.getElementById("play")!;
+const device = document.getElementById("device")!;
 
 function firstTouch() {
   if (touched) return;
@@ -120,7 +172,7 @@ function firstTouch() {
 function strike(pad: number) {
   wake();
   firstTouch();
-  sound?.note(selected, midiOf(selected, pad), 0, 0.92, panOf(pad));
+  play(selected, midiOf(selected, pad), 0.92, panOf(pad));
   stage.aim(pad, selected);
   engine.tap(selected, pad, clock.now());
 }
@@ -144,7 +196,7 @@ function select(id: number) {
 
 function audition(id: number) {
   stage.nudge(id, clock.now());
-  sound?.note(id, voiceMidi(id, 0), 0, 0.7, 0);
+  play(id, voiceMidi(id, 0), 0.7, 0);
 }
 
 /** curated first throws: [low, mid, high] pads, picked so the three interlock */
@@ -175,16 +227,18 @@ function togglePlay() {
   engine.serve(2, s[2], now, 8);
 }
 
-// ── picking a ball up ──────────────────────────────────────────────────────
-// A resting ball can be carried and thrown. The touch that lands on it still
-// does its normal job (strike the pad, select the nest); it only becomes a
+// ── a ball in the hand ─────────────────────────────────────────────────────
+// A ball sitting still can be picked up: the touch that lands on it still
+// does its normal job (strike the pad, select the nest) and only becomes a
 // carry once the finger has clearly moved.
+//
+// A ball in the air is caught: it stops under the finger at once, with a
+// soft pat instead of a note. Either way, letting go drops it or throws it.
 
 const GRAB = { slop: 8, window: 90 }; // px before it counts as a drag; ms of motion kept for velocity
 
 interface Grab {
   id: number;
-  pointer: number;
   x: number;
   y: number;
   ox: number;
@@ -192,16 +246,38 @@ interface Grab {
   carrying: boolean;
   trail: { x: number; y: number; t: number }[];
 }
-let grab: Grab | null = null;
+/** one per finger, so two hands can hold two balls */
+const grabs = new Map<number, Grab>();
 
-function grabStart(e: PointerEvent) {
-  if (grab) return;
-  const id = stage.ballAt(e.clientX, e.clientY);
-  if (id < 0) return;
+/** the ball leaves the tray for the hand */
+function take(g: Grab, e: PointerEvent) {
+  g.carrying = true;
+  if (selected !== g.id) {
+    selected = g.id;
+    stage.select(selected);
+  }
+  stage.unaim(g.id);
+  const pad = fingers.get(e.pointerId);
+  if (pad !== undefined) {
+    fingers.delete(e.pointerId);
+    if (![...fingers.values()].includes(pad)) stage.press(pad, false);
+  }
+  stage.take(g.id);
+  // the ball stays under the same part of the finger that touched it
+  engine.hold(g.id, stage.cellAt(e.clientX - g.ox, e.clientY - g.oy));
+}
+
+/** @returns true if the touch caught a ball out of the air (so it is not a tap on what is under it) */
+function grabStart(e: PointerEvent): boolean {
+  // a finger already carrying a ball has its hand full (anything else left under this id is stale)
+  if (grabs.get(e.pointerId)?.carrying) return false;
+  grabs.delete(e.pointerId);
+  const id = stage.ballAt(e.clientX, e.clientY, e.pointerType === "touch");
+  if (id < 0) return false;
+  for (const g of grabs.values()) if (g.id === id) return false;
   const c = stage.ballPx(id);
-  grab = {
+  const g: Grab = {
     id,
-    pointer: e.pointerId,
     x: e.clientX,
     y: e.clientY,
     ox: e.clientX - c.x,
@@ -209,39 +285,33 @@ function grabStart(e: PointerEvent) {
     carrying: false,
     trail: [],
   };
-}
-
-/** @returns true if this pointer is carrying a ball (so nothing else should react) */
-function grabMove(e: PointerEvent): boolean {
-  if (!grab || grab.pointer !== e.pointerId) return false;
-  if (!grab.carrying) {
-    if (Math.hypot(e.clientX - grab.x, e.clientY - grab.y) < GRAB.slop) return false;
-    grab.carrying = true;
-    if (selected !== grab.id) {
-      selected = grab.id;
-      stage.select(selected);
-    }
-    stage.aim(-1);
-    const pad = fingers.get(e.pointerId);
-    if (pad !== undefined) {
-      fingers.delete(e.pointerId);
-      stage.press(pad, false);
-    }
-    // the ball stays under the same part of the finger that touched it
-    engine.hold(grab.id, stage.cellAt(e.clientX - grab.ox, e.clientY - grab.oy));
-  }
-  engine.carry(grab.id, stage.cellAt(e.clientX - grab.ox, e.clientY - grab.oy));
-  const t = performance.now();
-  grab.trail.push({ x: e.clientX, y: e.clientY, t });
-  while (grab.trail.length > 2 && t - grab.trail[0].t > GRAB.window) grab.trail.shift();
+  grabs.set(e.pointerId, g);
+  if (engine.balls[id].mode !== "fly") return false;
+  wake();
+  firstTouch();
+  take(g, e);
+  if (audible()) sound!.pat(id, 0.8);
   return true;
 }
 
-function grabEnd(e: PointerEvent): boolean {
-  if (!grab || grab.pointer !== e.pointerId) return false;
-  const g = grab;
-  grab = null;
-  if (!g.carrying) return false;
+function grabMove(e: PointerEvent) {
+  const g = grabs.get(e.pointerId);
+  if (!g) return;
+  if (!g.carrying) {
+    if (Math.hypot(e.clientX - g.x, e.clientY - g.y) < GRAB.slop) return;
+    take(g, e);
+  }
+  engine.carry(g.id, stage.cellAt(e.clientX - g.ox, e.clientY - g.oy));
+  const t = performance.now();
+  g.trail.push({ x: e.clientX, y: e.clientY, t });
+  while (g.trail.length > 2 && t - g.trail[0].t > GRAB.window) g.trail.shift();
+}
+
+function grabEnd(e: PointerEvent) {
+  const g = grabs.get(e.pointerId);
+  if (!g) return;
+  grabs.delete(e.pointerId);
+  if (!g.carrying) return;
   let vx = 0;
   let vy = 0;
   const t = performance.now();
@@ -253,30 +323,38 @@ function grabEnd(e: PointerEvent): boolean {
     vy = ((b.y - a.y) / (b.t - a.t)) * 1000;
   }
   engine.release(g.id, clock.now(), { x: vx / stage.c, y: -vy / stage.c }, stage.letGo(g.id));
-  return true;
 }
+
+/** is this finger carrying a ball (so nothing else should react to it)? */
+const carrying = (e: PointerEvent) => grabs.get(e.pointerId)?.carrying === true;
+
+// One place follows every hand, ahead of the handlers on the things beneath it.
+window.addEventListener("pointermove", grabMove, true);
+window.addEventListener("pointerup", grabEnd, true);
+window.addEventListener("pointercancel", grabEnd, true);
 
 // pads: multi-touch, and sliding across wells strums them
 const fingers = new Map<number, number>();
 
 stage.tray.addEventListener("pointerdown", (e) => {
   const pad = stage.padAt(e.clientX, e.clientY);
-  if (pad < 0) return;
+  const over = stage.ballAt(e.clientX, e.clientY, e.pointerType === "touch");
+  if (pad < 0 && over < 0) return;
   e.preventDefault();
   stage.tray.setPointerCapture(e.pointerId);
+  if (grabStart(e)) return;
   // touching a ball that is sitting on the tray makes it the one that listens
-  const resting = stage.ballAt(e.clientX, e.clientY);
-  if (resting >= 0 && resting !== selected) {
-    selected = resting;
-    stage.select(resting);
+  if (over >= 0 && over !== selected) {
+    selected = over;
+    stage.select(over);
   }
-  grabStart(e);
+  if (pad < 0) return;
   fingers.set(e.pointerId, pad);
   stage.press(pad, true);
   strike(pad);
 });
 stage.tray.addEventListener("pointermove", (e) => {
-  if (grabMove(e)) return;
+  if (carrying(e)) return;
   const was = fingers.get(e.pointerId);
   if (was === undefined) return;
   // only a deliberate arrival in another well counts
@@ -288,7 +366,6 @@ stage.tray.addEventListener("pointermove", (e) => {
   strike(pad);
 });
 const lift = (e: PointerEvent) => {
-  grabEnd(e);
   const was = fingers.get(e.pointerId);
   if (was === undefined) return;
   fingers.delete(e.pointerId);
@@ -307,15 +384,24 @@ stage.homes.forEach((home, id) => {
   home.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     home.setPointerCapture(e.pointerId);
-    grabStart(e);
+    if (grabStart(e)) return;
     select(id);
   });
-  home.addEventListener("pointermove", grabMove);
-  home.addEventListener("pointerup", grabEnd);
-  home.addEventListener("pointercancel", grabEnd);
   home.addEventListener("click", (e) => {
     if (e.detail === 0) select(id);
   });
+});
+
+// a ball crossing the bare slab (on its way home, say) can be caught there too
+device.addEventListener("pointerdown", (e) => {
+  if ((e.target as Element).closest(".tray, .home, .play, .knob")) return;
+  if (stage.ballAt(e.clientX, e.clientY, e.pointerType === "touch") < 0) return;
+  if (!grabStart(e)) {
+    grabs.delete(e.pointerId);
+    return;
+  }
+  e.preventDefault();
+  device.setPointerCapture(e.pointerId);
 });
 
 playKey.addEventListener("pointerdown", (e) => {
