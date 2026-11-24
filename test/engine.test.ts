@@ -7,8 +7,8 @@
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Engine, H, W } from "../src/engine.ts";
-import type { Pose } from "../src/engine.ts";
+import { Engine, H, W, period } from "../src/engine.ts";
+import type { Pose, Throw } from "../src/engine.ts";
 
 function rng(seed: number) {
   let s = seed >>> 0;
@@ -186,4 +186,109 @@ test("a caught ball can be thrown: the flick sets its direction and its stride",
   e.release(0, t, { x: 15, y: 0 }, 0.5); // a firm flick to the right: two wells a hop
   for (; t < 3; t += 1 / 120) e.advance(t);
   assert.deepEqual(lands.slice(0, 4), [6, 7, 5, 4], "across the row in twos, folding at the walls");
+});
+
+test("a loop's period is how long until it is back where it started", () => {
+  assert.equal(period(0, 0), 2, "a dribble");
+  assert.equal(period(1, 0), 8, "there and back along a row");
+  assert.equal(period(2, 0), 8, "four hops of two steps");
+  assert.equal(period(1, 2), 16);
+  assert.equal(period(3, 3), 24);
+  assert.equal(period(1, 4), 32, "the long stride a ball leaves a nest with");
+  for (let sx = -3; sx <= 3; sx++) for (let sy = -3; sy <= 3; sy++) assert.ok(period(sx, sy) <= 24);
+  for (let sx = -6; sx <= 6; sx++) for (let sy = -6; sy <= 6; sy++) assert.ok(period(sx, sy) <= 48);
+});
+
+/** every landing as [step, ball, pad], for however long */
+function listen(e: Engine, lands: [number, number, number][], from: number, to: number) {
+  for (let t = from; t < to; t += 1 / 120) e.advance(t);
+  return lands;
+}
+
+function fresh(lands: [number, number, number][]) {
+  const e = new Engine(
+    { land: (b, pad, when) => lands.push([when / e.stepSeconds, b.id, pad]), wall() {}, home() {} },
+    3,
+  );
+  e.setTempo(96, 0);
+  e.balls.forEach((_b, i) => e.setHome(i, { x: i, y: -1.3 }));
+  return e;
+}
+
+test("a snapshot written down and set again plays the same thing", () => {
+  for (let seed = 1; seed <= 40; seed++) {
+    const rnd = rng(seed * 7919);
+    const a: [number, number, number][] = [];
+    const e = fresh(a);
+    // a player builds something: taps on all three balls, some of them re-aims in flight
+    let t = 0;
+    for (let i = 0; i < 9; i++) {
+      t += 0.2 + rnd() * 0.9;
+      listen(e, a, t - 0.01, t);
+      e.tap(i % 3, Math.floor(rnd() * 16), t);
+    }
+    listen(e, a, t, t + 4);
+    const snap = e.snapshot();
+    assert.ok(snap.every((s) => s !== null), "all three are out");
+    a.length = 0;
+    listen(e, a, t + 4, t + 12);
+
+    // three loops of up to 24 steps line up again within 48, so listen for a good while
+    const b: [number, number, number][] = [];
+    const f = fresh(b);
+    f.restore(snap, 0.5);
+    listen(f, b, 0, 30);
+
+    // same landings, ball by ball, once the two are lined up in time
+    const key = (l: [number, number, number][], id: number) => l.filter((x) => x[1] === id);
+    // line them up on ball 0: find the shift that makes its sequences agree
+    const a0 = key(a, 0);
+    const b0 = key(b, 0);
+    let shift = NaN;
+    for (const cand of b0.slice(0, 80)) {
+      const d = cand[0] - a0[0][0];
+      const ok = [0, 1, 2].every((id) => {
+        const A = key(a, id);
+        const B = key(b, id);
+        return A.slice(0, 12).every((x) => B.some((y) => y[2] === x[2] && Math.abs(y[0] - d - x[0]) < 1e-6));
+      });
+      if (ok) {
+        shift = d;
+        break;
+      }
+    }
+    assert.ok(!Number.isNaN(shift), `seed ${seed}: restored balls play the same pads at the same steps apart`);
+  }
+});
+
+test("the same loop reads the same however long it has been running, and after being set again", () => {
+  for (let seed = 1; seed <= 60; seed++) {
+    const rnd = rng(seed * 104729);
+    const e = fresh([]);
+    for (let i = 0; i < 3; i++) e.tap(i, Math.floor(rnd() * 16), 0.1 + i * (0.2 + rnd()));
+    listen(e, [], 0, 5);
+    const early = JSON.stringify(e.snapshot());
+    // any number of steps later, not just a tidy multiple of something
+    const later = 5 + (1 + Math.floor(rnd() * 90)) * e.stepSeconds;
+    listen(e, [], 5, later + 0.01);
+    assert.equal(JSON.stringify(e.snapshot()), early, `seed ${seed}: still spelled the same`);
+
+    const f = fresh([]);
+    f.restore(e.snapshot(), 0.3 + rnd());
+    listen(f, [], 0, 9);
+    assert.equal(JSON.stringify(f.snapshot()), early, `seed ${seed}: and the same again once restored`);
+  }
+});
+
+test("a ball in its nest, in a hand or going home is not part of the snapshot", () => {
+  const e = fresh([]);
+  e.tap(0, 5, 0);
+  e.tap(1, 10, 0);
+  listen(e, [], 0, 2);
+  e.hold(1, { x: 1, y: 1 });
+  let snap: (Throw | null)[] = e.snapshot();
+  assert.ok(snap[0] !== null && snap[1] === null && snap[2] === null);
+  e.recall(0, 2);
+  snap = e.snapshot();
+  assert.deepEqual(snap, [null, null, null]);
 });

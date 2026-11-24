@@ -1,8 +1,11 @@
 import "./style.css";
 import { Sound } from "./audio";
 import { Engine, W } from "./engine";
+import type { Throw } from "./engine";
 import { Knob } from "./knob";
-import { SCALES, padSemis, voiceMidi } from "./scales";
+import { decode, encode } from "./link";
+import type { Patch } from "./link";
+import { SCALES, noteName, padSemis, rootShift, voiceMidi } from "./scales";
 import { Stage } from "./stage";
 
 // ── clock: seconds that only pass while the page is visible ────────────────
@@ -30,6 +33,8 @@ const clock = {
 
 const TEMPO = { min: 60, max: 150, start: 96 };
 let scale = SCALES[0];
+/** semitones above C, 0–11 */
+let root = 0;
 let selected = 1;
 let tone = 0.5;
 let touched = false;
@@ -39,7 +44,7 @@ let sound: Sound | null = null;
 
 const panOf = (pad: number) => ((pad % W) / (W - 1)) * 2 - 1;
 const midiOf = (voice: number, pad: number) =>
-  voiceMidi(voice, padSemis(pad % W, Math.floor(pad / W), scale));
+  voiceMidi(voice, padSemis(pad % W, Math.floor(pad / W), scale)) + rootShift(root);
 /** clock seconds → audio context seconds */
 const audioTime = (when: number) => actx!.currentTime + (when - clock.now());
 const audible = () => sound !== null && actx !== null && actx.state === "running";
@@ -64,7 +69,7 @@ const engine = new Engine(
 engine.setTempo(TEMPO.start, 0);
 
 const stage = new Stage(engine);
-stage.setScale(scale);
+stage.setScale(scale, root);
 stage.select(selected);
 
 // ── audio ──────────────────────────────────────────────────────────────────
@@ -177,6 +182,7 @@ function strike(pad: number) {
   wake();
   firstTouch();
   play(selected, midiOf(selected, pad), panOf(pad));
+  own = true;
   stage.aim(pad, selected);
   engine.tap(selected, pad, clock.now());
 }
@@ -201,7 +207,7 @@ function select(id: number) {
 function audition(id: number) {
   stage.nudge(id, clock.now());
   // nothing lands after this one, so it speaks up a little
-  play(id, voiceMidi(id, 0), 0, 1.4);
+  play(id, voiceMidi(id, 0) + rootShift(root), 0, 1.4);
 }
 
 /** curated first throws: [low, mid, high] pads, picked so the three interlock */
@@ -214,6 +220,11 @@ const SERVES = [
 ];
 let lastServe = -1;
 
+/** the last thing the balls were doing, kept after they are called home so the key can serve it again */
+let pattern: (Throw | null)[] | null = null;
+/** the player made it (or was sent it); a serve of ours that nobody touched is not worth repeating */
+let own = false;
+
 function togglePlay() {
   wake();
   firstTouch();
@@ -223,6 +234,11 @@ function togglePlay() {
     stage.aim(-1);
     return;
   }
+  if (pattern && own) {
+    engine.restore(pattern, now);
+    return;
+  }
+  own = false;
   let i = Math.floor(Math.random() * SERVES.length);
   if (i === lastServe) i = (i + 1) % SERVES.length;
   lastServe = i;
@@ -328,6 +344,7 @@ function grabEnd(e: PointerEvent) {
     vy = ((b.y - a.y) / (b.t - a.t)) * 1000;
   }
   engine.release(g.id, clock.now(), { x: vx / stage.c, y: -vy / stage.c }, stage.letGo(g.id));
+  own = true;
 }
 
 /** is this finger carrying a ball (so nothing else should react to it)? */
@@ -425,7 +442,7 @@ const bpmOf = (v: number) => Math.round(TEMPO.min + v * (TEMPO.max - TEMPO.min))
 /** the last stretch of the knob is a detent: lossless, forever */
 const bounceOf = (v: number) => (v >= 0.93 ? 1 : 0.45 + 0.5 * (v / 0.93));
 
-new Knob(knobs, {
+const tempoKnob = new Knob(knobs, {
   label: "tempo",
   value: (TEMPO.start - TEMPO.min) / (TEMPO.max - TEMPO.min),
   format: (v) => String(bpmOf(v)),
@@ -436,7 +453,7 @@ new Knob(knobs, {
     echoTimer = window.setTimeout(() => sound?.setStep(engine.stepSeconds), 180);
   },
 });
-new Knob(knobs, {
+const bounceKnob = new Knob(knobs, {
   label: "bounce",
   value: 1,
   format: (v) => (bounceOf(v) >= 1 ? "∞" : String(Math.round(bounceOf(v) * 100))),
@@ -444,7 +461,7 @@ new Knob(knobs, {
     engine.bounce = bounceOf(v);
   },
 });
-new Knob(knobs, {
+const toneKnob = new Knob(knobs, {
   label: "tone",
   value: tone,
   format: (v) => String(Math.round(v * 100)),
@@ -453,15 +470,125 @@ new Knob(knobs, {
     if (sound) sound.tone = v;
   },
 });
-new Knob(knobs, {
+// Turn it for the scale; push it, like an encoder, to step the root up a semitone.
+const scaleKnob: Knob = new Knob(knobs, {
   label: "scale",
   value: 0,
   steps: SCALES.length,
   format: (v) => SCALES[Math.round(v * (SCALES.length - 1))].name,
   onChange: (v) => {
     scale = SCALES[Math.round(v * (SCALES.length - 1))];
-    stage.setScale(scale);
+    stage.setScale(scale, root);
   },
+  onPush: () => {
+    wake();
+    setRoot((root + 1) % 12);
+    scaleKnob.say("root " + noteName(root));
+    // hear where it has gone: the listening ball's voice, on the new root
+    play(selected, voiceMidi(selected, 0) + rootShift(root), 0, 1.4);
+  },
+});
+
+function setRoot(r: number) {
+  root = r;
+  stage.setScale(scale, root);
+}
+
+// ── the link ───────────────────────────────────────────────────────────────
+// The address always says what is playing: the four knobs, the root, and the
+// course each ball is on. Reloading it, or opening it somewhere else, sets
+// the knobs and leaves the balls in their nests; the key serves them.
+
+const BLANK = encode({ tempo: TEMPO.start, bounce: 100, tone: 50, scale: 0, root: 0, throws: [null, null, null] });
+
+const patch = (): Patch => ({
+  tempo: bpmOf(tempoKnob.value),
+  bounce: Math.round(bounceKnob.value * 100),
+  tone: Math.round(toneKnob.value * 100),
+  scale: SCALES.indexOf(scale),
+  root,
+  throws: pattern ?? [null, null, null],
+});
+
+function apply(p: Patch) {
+  tempoKnob.set((p.tempo - TEMPO.min) / (TEMPO.max - TEMPO.min), false);
+  bounceKnob.set(p.bounce / 100, false);
+  toneKnob.set(p.tone / 100, false);
+  scaleKnob.set(p.scale / (SCALES.length - 1), false);
+  setRoot(p.root);
+  pattern = p.throws.some(Boolean) ? p.throws : null;
+  own = pattern !== null;
+}
+
+let seen = BLANK;
+let written = BLANK;
+
+/** keep the address up to date, once what it would say has held still for a moment */
+function sync(now = false) {
+  const snap = engine.snapshot();
+  if (snap.some(Boolean)) pattern = snap;
+  const token = encode(patch());
+  if (token !== seen && !now) {
+    seen = token;
+    return;
+  }
+  seen = token;
+  if (token === written) return;
+  written = token;
+  try {
+    history.replaceState(null, "", token === BLANK ? location.pathname + location.search : "#" + token);
+  } catch {
+    /* some browsers ration this; the next change will try again */
+  }
+}
+
+function openLink(hash: string) {
+  const p = decode(hash, SCALES.length);
+  if (!p) return false;
+  const now = clock.now();
+  for (const b of engine.balls) engine.recall(b.id, now);
+  stage.aim(-1);
+  apply(p);
+  seen = written = encode(p);
+  return true;
+}
+
+if (openLink(location.hash) && pattern) tag.textContent = "press play";
+setInterval(() => sync(), 300);
+window.addEventListener("hashchange", () => {
+  if (location.hash.replace(/^#/, "") !== written) openLink(location.hash);
+});
+
+const linkKey = document.getElementById("link")!;
+const linkSays = linkKey.querySelector<HTMLElement>(".link-val")!;
+let linkTimer = 0;
+
+function linkSay(text: string) {
+  linkSays.textContent = text;
+  linkKey.classList.add("show");
+  clearTimeout(linkTimer);
+  linkTimer = window.setTimeout(() => linkKey.classList.remove("show"), 1100);
+}
+
+// a click, not a press: sharing and the clipboard are only allowed once a finger has lifted
+linkKey.addEventListener("click", async () => {
+  sync(true);
+  const url = location.href;
+  if (matchMedia("(pointer: coarse)").matches && typeof navigator.share === "function") {
+    try {
+      await navigator.share({ title: "bop", url });
+    } catch {
+      /* closed without sharing */
+    }
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    linkSay("copied");
+  } catch {
+    // no clipboard here: it is in the address bar all the same
+    linkSay("in url");
+  }
 });
 
 // ── keyboard ───────────────────────────────────────────────────────────────

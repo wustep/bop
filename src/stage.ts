@@ -16,7 +16,7 @@ import { drawBall, pips, qarc, qaxis, qmul, qnorm, qrot, qslerp } from "./ball-a
 import type { Quat, V3 } from "./ball-art";
 import { H, W } from "./engine";
 import type { Ball, Engine, Pose } from "./engine";
-import { noteName, padSemis } from "./scales";
+import { noteName, padSemis, rootShift } from "./scales";
 import type { Scale } from "./scales";
 
 /** radius in design units, pip count */
@@ -256,13 +256,14 @@ export class Stage {
     return row * W + col;
   }
 
-  setScale(scale: Scale) {
+  /** @param root semitones above C, 0–11 */
+  setScale(scale: Scale, root = 0) {
     this.pads.forEach((pad, i) => {
       const semis = padSemis(i % W, Math.floor(i / W), scale);
-      const name = noteName(semis);
+      const name = noteName(semis + root);
       this.notes[i].textContent = name;
       this.notes[i].classList.toggle("tonic", semis % 12 === 0);
-      pad.setAttribute("aria-label", name + (Math.floor(semis / 12) + 4));
+      pad.setAttribute("aria-label", name + (Math.floor((semis + rootShift(root)) / 12) + 4));
     });
   }
 
