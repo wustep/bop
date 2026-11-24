@@ -102,8 +102,6 @@ export class Knob {
       startV = raw = this.value;
       k.classList.add("held");
       this.flash();
-      e.preventDefault();
-      k.focus({ preventScroll: true });
     });
     k.addEventListener("pointermove", (e) => {
       if (e.pointerId !== id) return;

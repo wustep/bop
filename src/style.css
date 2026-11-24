@@ -2,9 +2,9 @@
  * bop — one object on a quiet table.
  *
  * Grammar:
- *   pale + debossed  = the surface (things are received here)
- *   black + raised   = things you move (balls, knobs, the key)
- *   yellow           = state (where a ball is headed, which ball listens)
+ *   pale     = the instrument: debossed where it receives, raised where you turn it
+ *   black    = the balls, and only the balls
+ *   yellow   = state (where a ball is headed, which ball listens, the tonic)
  *
  * One light, upper left. Every shadow falls down-right; every dimple is
  * dark on its upper-left wall and bright on its lower-right one.
@@ -27,7 +27,7 @@
   --table: #c9c7c2;
   --paper: #efede8;
   --ink: #18181a;
-  --mute: #8d8a83;
+  --mute: #69665e; /* 4.9:1 on the slab */
   --rubber: #1b1b1d;
   --signal: #ffc400;
   --shade: 62, 54, 40; /* warm shadow, as rgb */
@@ -78,13 +78,20 @@ button:focus {
 }
 
 .stage {
-  --u: min(calc((100vw - 16px) / 400), calc((100svh - 16px) / 624), 1.3px);
+  --u: min(calc((100vw - 16px) / 400), calc((100vh - 16px) / 624), 1.3px);
   position: fixed;
   inset: 0;
   display: grid;
   place-items: center;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
     env(safe-area-inset-left);
+}
+
+/* fit inside the phone's toolbars where the browser can tell us about them */
+@supports (height: 100svh) {
+  .stage {
+    --u: min(calc((100vw - 16px) / 400), calc((100svh - 16px) / 624), 1.3px);
+  }
 }
 
 /* ── the slab ─────────────────────────────────────────────────────────── */
@@ -106,8 +113,9 @@ button:focus {
   transition:
     opacity 500ms var(--ease-out),
     transform 600ms var(--ease-out);
-
-  @starting-style {
+}
+@starting-style {
+  .device {
     opacity: 0;
     transform: translateY(10px) scale(0.985);
   }
@@ -220,7 +228,8 @@ button:focus {
   transition: transform 110ms var(--ease-out);
 }
 /* a finger presses the dimple deeper */
-.well::after {
+.well::after,
+.nest::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -233,9 +242,24 @@ button:focus {
   transform: scale(0.94);
   transition-duration: 50ms;
 }
-.pad.down .well::after {
+.pad.down .well::after,
+.home:active .nest::after {
   opacity: 1;
   transition-duration: 50ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pad:hover .well::after,
+  .home:hover .nest::after {
+    opacity: 0.4;
+  }
+  .play:hover .keycap {
+    transform: translate(calc(var(--u) * -0.4), calc(var(--u) * -0.6));
+  }
+  .play.on:hover .keycap,
+  .play:active:hover .keycap {
+    transform: translate(calc(var(--u) * 1.6), calc(var(--u) * 2.2)) scale(0.985);
+  }
 }
 
 /* where the listening ball is headed next */
@@ -367,12 +391,13 @@ button:focus {
   width: calc(var(--u) * 50);
   height: calc(var(--u) * 50);
   border-radius: calc(var(--u) * 15);
-  background: linear-gradient(140deg, #38383b 0%, #1f1f21 45%, #111112 100%);
+  background: linear-gradient(140deg, #fdfcf9 0%, #f1efea 50%, #e3e1db 100%);
   box-shadow:
-    inset calc(var(--u) * 0.8) calc(var(--u) * 1) calc(var(--u) * 0.8) rgba(255, 255, 255, 0.22),
-    inset calc(var(--u) * -1) calc(var(--u) * -1.4) calc(var(--u) * 1.6) rgba(0, 0, 0, 0.6),
-    calc(var(--u) * 1) calc(var(--u) * 1.4) calc(var(--u) * 1.2) rgba(var(--shade), 0.5),
-    calc(var(--u) * 4) calc(var(--u) * 6) calc(var(--u) * 7) rgba(var(--shade), 0.34);
+    inset calc(var(--u) * 1) calc(var(--u) * 1.2) calc(var(--u) * 1) rgba(255, 255, 255, 1),
+    inset calc(var(--u) * -1.2) calc(var(--u) * -1.6) calc(var(--u) * 2) rgba(var(--shade), 0.16),
+    0 0 0 calc(var(--u) * 0.6) rgba(var(--shade), 0.1),
+    calc(var(--u) * 1) calc(var(--u) * 1.5) calc(var(--u) * 1.5) rgba(var(--shade), 0.34),
+    calc(var(--u) * 4.5) calc(var(--u) * 6.5) calc(var(--u) * 8) rgba(var(--shade), 0.26);
   transition:
     transform 120ms var(--ease-out),
     box-shadow 120ms var(--ease-out);
@@ -380,18 +405,19 @@ button:focus {
 /* latched while anything is in play: it sits lower, so its shadow pulls in */
 .play:active .keycap,
 .play.on .keycap {
-  transform: translate(calc(var(--u) * 1.4), calc(var(--u) * 2)) scale(0.985);
+  transform: translate(calc(var(--u) * 1.6), calc(var(--u) * 2.2)) scale(0.985);
   box-shadow:
-    inset calc(var(--u) * 0.8) calc(var(--u) * 1) calc(var(--u) * 0.8) rgba(255, 255, 255, 0.18),
-    inset calc(var(--u) * -1) calc(var(--u) * -1.4) calc(var(--u) * 1.6) rgba(0, 0, 0, 0.6),
-    calc(var(--u) * 0.5) calc(var(--u) * 0.7) calc(var(--u) * 0.8) rgba(var(--shade), 0.55),
-    calc(var(--u) * 1.2) calc(var(--u) * 1.8) calc(var(--u) * 2.4) rgba(var(--shade), 0.3);
+    inset calc(var(--u) * 1) calc(var(--u) * 1.2) calc(var(--u) * 1) rgba(255, 255, 255, 0.9),
+    inset calc(var(--u) * -1.2) calc(var(--u) * -1.6) calc(var(--u) * 2) rgba(var(--shade), 0.18),
+    0 0 0 calc(var(--u) * 0.6) rgba(var(--shade), 0.12),
+    calc(var(--u) * 0.5) calc(var(--u) * 0.8) calc(var(--u) * 0.8) rgba(var(--shade), 0.4),
+    calc(var(--u) * 1.2) calc(var(--u) * 1.8) calc(var(--u) * 2.4) rgba(var(--shade), 0.22);
   transition-duration: 60ms;
 }
 .glyph {
-  width: calc(var(--u) * 15);
-  height: calc(var(--u) * 15);
-  background: var(--signal);
+  width: calc(var(--u) * 14);
+  height: calc(var(--u) * 14);
+  background: var(--ink);
   clip-path: polygon(18% 4%, 18% 96%, 98% 50%, 98% 50%);
   transition: clip-path 180ms var(--ease-out);
 }
@@ -438,16 +464,18 @@ button:focus {
   position: absolute;
   inset: calc(var(--u) * 1);
   border-radius: 50%;
-  background: rgba(var(--shade), 0.5);
+  background: rgba(var(--shade), 0.42);
   filter: blur(calc(var(--u) * 4.5));
-  transform: translate(calc(var(--u) * 5.5), calc(var(--u) * 8));
+  transform: translate(calc(var(--u) * 6), calc(var(--u) * 8.5));
 }
 .knob-body {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: #101011;
-  box-shadow: calc(var(--u) * 1) calc(var(--u) * 1.5) calc(var(--u) * 1.5) rgba(var(--shade), 0.55);
+  background: #d9d7d1;
+  box-shadow:
+    0 0 0 calc(var(--u) * 0.6) rgba(var(--shade), 0.12),
+    calc(var(--u) * 1) calc(var(--u) * 1.6) calc(var(--u) * 1.6) rgba(var(--shade), 0.4);
   transition: transform 140ms var(--ease-out);
 }
 .knob.held .knob-body {
@@ -458,18 +486,19 @@ button:focus {
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  background: repeating-conic-gradient(from 0deg, #2c2c2f 0deg 3deg, #0c0c0d 3deg 7.5deg);
+  background: repeating-conic-gradient(from 0deg, #f6f4ef 0deg 3.2deg, #cfcdc6 3.2deg 7.5deg);
 }
 /* the lit top face does not: the light stays put */
 .knob-face {
   position: absolute;
   inset: calc(var(--u) * 4.5);
   border-radius: 50%;
-  background: radial-gradient(circle at 34% 28%, #47474b 0%, #262628 42%, #161617 100%);
+  background: radial-gradient(circle at 34% 28%, #ffffff 0%, #f3f1ec 45%, #e4e2dc 100%);
   box-shadow:
-    inset calc(var(--u) * 0.8) calc(var(--u) * 1) calc(var(--u) * 0.8) rgba(255, 255, 255, 0.2),
-    inset calc(var(--u) * -1) calc(var(--u) * -1.4) calc(var(--u) * 2) rgba(0, 0, 0, 0.55),
-    0 0 0 calc(var(--u) * 0.8) rgba(0, 0, 0, 0.5);
+    inset calc(var(--u) * 1) calc(var(--u) * 1.2) calc(var(--u) * 1) rgba(255, 255, 255, 1),
+    inset calc(var(--u) * -1.2) calc(var(--u) * -1.6) calc(var(--u) * 2.2) rgba(var(--shade), 0.18),
+    0 0 0 calc(var(--u) * 0.7) rgba(var(--shade), 0.16),
+    calc(var(--u) * 0.6) calc(var(--u) * 0.9) calc(var(--u) * 1.2) rgba(var(--shade), 0.2);
 }
 .knob-dial {
   position: absolute;
@@ -478,12 +507,12 @@ button:focus {
 .knob-pip {
   position: absolute;
   left: 50%;
-  top: calc(var(--u) * 8.5);
+  top: calc(var(--u) * 9);
   width: calc(var(--u) * 5.5);
   height: calc(var(--u) * 5.5);
   margin-left: calc(var(--u) * -2.75);
   border-radius: 50%;
-  background: var(--signal);
+  background: var(--ink);
 }
 .knob.stepped .knob-dial,
 .knob.stepped .knob-grip {
@@ -559,7 +588,12 @@ button:focus {
 
 @media (orientation: landscape) and (max-height: 540px) {
   .stage {
-    --u: min(calc((100vw - 16px) / 612), calc((100svh - 16px) / 396), 1.3px);
+    --u: min(calc((100vw - 16px) / 612), calc((100vh - 16px) / 396), 1.3px);
+  }
+  @supports (height: 100svh) {
+    .stage {
+      --u: min(calc((100vw - 16px) / 612), calc((100svh - 16px) / 396), 1.3px);
+    }
   }
   .device {
     --dw: 612;
@@ -600,7 +634,9 @@ button:focus {
 @media (prefers-reduced-motion: reduce) {
   .device {
     transition: opacity 300ms ease;
-    @starting-style {
+  }
+  @starting-style {
+    .device {
       transform: none;
     }
   }

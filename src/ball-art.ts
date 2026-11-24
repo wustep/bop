@@ -83,19 +83,24 @@ export function qslerp(a: Quat, b: Quat, t: number): Quat {
   ];
 }
 
-/** n pips clustered round the ball's pole (which faces the camera at rest) */
+/**
+ * n pips clustered round a pole, printed again on the opposite pole so the
+ * ball can be told apart whichever way up it lands.
+ */
 export function pips(n: number): V3[] {
-  if (n === 1) return [[0, 0, -1]];
-  const spread = n === 2 ? 0.25 : 0.3;
-  const out: V3[] = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2 + (n === 2 ? 0 : -Math.PI / 2);
-    const x = Math.cos(a) * spread;
-    const y = Math.sin(a) * spread;
-    const l = Math.hypot(x, y, 1);
-    out.push([x / l, y / l, -1 / l]);
+  const front: V3[] = [];
+  if (n === 1) front.push([0, 0, -1]);
+  else {
+    const spread = n === 2 ? 0.25 : 0.3;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + (n === 2 ? 0 : -Math.PI / 2);
+      const x = Math.cos(a) * spread;
+      const y = Math.sin(a) * spread;
+      const l = Math.hypot(x, y, 1);
+      front.push([x / l, y / l, -1 / l]);
+    }
   }
-  return out;
+  return [...front, ...front.map((p): V3 => [-p[0], p[1], -p[2]])];
 }
 
 export interface Squash {

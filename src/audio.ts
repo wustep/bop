@@ -34,7 +34,7 @@ interface Live {
 }
 
 /** gain after the compressor; set by measuring offline renders */
-const MAKEUP = 1.5;
+const MAKEUP = 1.3;
 
 const STRIPS = [
   // dry, echo send, room send, max voices
@@ -241,8 +241,8 @@ export class Sound {
     if (voice === LO) {
       // round rubber thump with a sub underneath
       panner.pan.value = pan * 0.15;
-      const dur = (0.75 + 0.45 * ring) * Math.pow(131 / f, 0.2);
-      end = this.env(out.gain, t, 0.004, 0.32 * amp, dur);
+      const dur = (0.5 + 0.4 * ring) * Math.pow(131 / f, 0.2);
+      end = this.env(out.gain, t, 0.004, 0.27 * amp, dur);
 
       const lp = ctx.createBiquadFilter();
       lp.type = "lowpass";
@@ -253,7 +253,8 @@ export class Sound {
       const car = ctx.createOscillator();
       car.frequency.setValueAtTime(f * 1.5, t);
       car.frequency.exponentialRampToValueAtTime(f, t + 0.03);
-      this.fm(car, t, f, 1.5 * bright, 0.18, 0.14, end);
+      // the index never falls to zero: the overtones are what a phone speaker can play
+      this.fm(car, t, f, 1.5 * bright, 0.42, 0.16, end);
       car.connect(lp);
       car.start(t);
       car.stop(end);
@@ -262,7 +263,7 @@ export class Sound {
       sub.frequency.setValueAtTime(f * 0.75, t);
       sub.frequency.exponentialRampToValueAtTime(f * 0.5, t + 0.03);
       const subG = ctx.createGain();
-      subG.gain.value = 0.6;
+      subG.gain.value = 0.38;
       sub.connect(subG).connect(out);
       sub.start(t);
       sub.stop(end);

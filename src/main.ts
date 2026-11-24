@@ -76,6 +76,11 @@ function wake() {
     actx = new AC({ latencyHint: "interactive" });
     sound = new Sound(actx, engine.stepSeconds);
     sound.tone = tone;
+    // one silent sample: older iOS only truly opens the output once something has played
+    const blip = actx.createBufferSource();
+    blip.buffer = actx.createBuffer(1, 1, actx.sampleRate);
+    blip.connect(actx.destination);
+    blip.start();
     try {
       // play even when the iPhone ring switch is on silent
       (navigator as unknown as { audioSession: { type: string } }).audioSession.type = "playback";
@@ -116,7 +121,7 @@ function strike(pad: number) {
   wake();
   firstTouch();
   sound?.note(selected, midiOf(selected, pad), 0, 0.92, panOf(pad));
-  stage.aim(pad);
+  stage.aim(pad, selected);
   engine.tap(selected, pad, clock.now());
 }
 
@@ -131,7 +136,10 @@ function select(id: number) {
     return;
   }
   if (ball.mode === "home") audition(id);
-  else engine.recall(id, clock.now());
+  else {
+    engine.recall(id, clock.now());
+    stage.aim(-1);
+  }
 }
 
 function audition(id: number) {
@@ -167,6 +175,87 @@ function togglePlay() {
   engine.serve(2, s[2], now, 8);
 }
 
+// ── picking a ball up ──────────────────────────────────────────────────────
+// A resting ball can be carried and thrown. The touch that lands on it still
+// does its normal job (strike the pad, select the nest); it only becomes a
+// carry once the finger has clearly moved.
+
+const GRAB = { slop: 8, window: 90 }; // px before it counts as a drag; ms of motion kept for velocity
+
+interface Grab {
+  id: number;
+  pointer: number;
+  x: number;
+  y: number;
+  ox: number;
+  oy: number;
+  carrying: boolean;
+  trail: { x: number; y: number; t: number }[];
+}
+let grab: Grab | null = null;
+
+function grabStart(e: PointerEvent) {
+  if (grab) return;
+  const id = stage.ballAt(e.clientX, e.clientY);
+  if (id < 0) return;
+  const c = stage.ballPx(id);
+  grab = {
+    id,
+    pointer: e.pointerId,
+    x: e.clientX,
+    y: e.clientY,
+    ox: e.clientX - c.x,
+    oy: e.clientY - c.y,
+    carrying: false,
+    trail: [],
+  };
+}
+
+/** @returns true if this pointer is carrying a ball (so nothing else should react) */
+function grabMove(e: PointerEvent): boolean {
+  if (!grab || grab.pointer !== e.pointerId) return false;
+  if (!grab.carrying) {
+    if (Math.hypot(e.clientX - grab.x, e.clientY - grab.y) < GRAB.slop) return false;
+    grab.carrying = true;
+    if (selected !== grab.id) {
+      selected = grab.id;
+      stage.select(selected);
+    }
+    stage.aim(-1);
+    const pad = fingers.get(e.pointerId);
+    if (pad !== undefined) {
+      fingers.delete(e.pointerId);
+      stage.press(pad, false);
+    }
+    // the ball stays under the same part of the finger that touched it
+    engine.hold(grab.id, stage.cellAt(e.clientX - grab.ox, e.clientY - grab.oy));
+  }
+  engine.carry(grab.id, stage.cellAt(e.clientX - grab.ox, e.clientY - grab.oy));
+  const t = performance.now();
+  grab.trail.push({ x: e.clientX, y: e.clientY, t });
+  while (grab.trail.length > 2 && t - grab.trail[0].t > GRAB.window) grab.trail.shift();
+  return true;
+}
+
+function grabEnd(e: PointerEvent): boolean {
+  if (!grab || grab.pointer !== e.pointerId) return false;
+  const g = grab;
+  grab = null;
+  if (!g.carrying) return false;
+  let vx = 0;
+  let vy = 0;
+  const t = performance.now();
+  const a = g.trail[0];
+  const b = g.trail[g.trail.length - 1];
+  // a finger that stopped before lifting is a drop, not a throw
+  if (a && b && b.t > a.t && t - b.t < 60) {
+    vx = ((b.x - a.x) / (b.t - a.t)) * 1000;
+    vy = ((b.y - a.y) / (b.t - a.t)) * 1000;
+  }
+  engine.release(g.id, clock.now(), { x: vx / stage.c, y: -vy / stage.c }, stage.letGo(g.id));
+  return true;
+}
+
 // pads: multi-touch, and sliding across wells strums them
 const fingers = new Map<number, number>();
 
@@ -175,11 +264,19 @@ stage.tray.addEventListener("pointerdown", (e) => {
   if (pad < 0) return;
   e.preventDefault();
   stage.tray.setPointerCapture(e.pointerId);
+  // touching a ball that is sitting on the tray makes it the one that listens
+  const resting = stage.ballAt(e.clientX, e.clientY);
+  if (resting >= 0 && resting !== selected) {
+    selected = resting;
+    stage.select(resting);
+  }
+  grabStart(e);
   fingers.set(e.pointerId, pad);
   stage.press(pad, true);
   strike(pad);
 });
 stage.tray.addEventListener("pointermove", (e) => {
+  if (grabMove(e)) return;
   const was = fingers.get(e.pointerId);
   if (was === undefined) return;
   // only a deliberate arrival in another well counts
@@ -191,6 +288,7 @@ stage.tray.addEventListener("pointermove", (e) => {
   strike(pad);
 });
 const lift = (e: PointerEvent) => {
+  grabEnd(e);
   const was = fingers.get(e.pointerId);
   if (was === undefined) return;
   fingers.delete(e.pointerId);
@@ -208,8 +306,13 @@ stage.tray.addEventListener("click", (e) => {
 stage.homes.forEach((home, id) => {
   home.addEventListener("pointerdown", (e) => {
     e.preventDefault();
+    home.setPointerCapture(e.pointerId);
+    grabStart(e);
     select(id);
   });
+  home.addEventListener("pointermove", grabMove);
+  home.addEventListener("pointerup", grabEnd);
+  home.addEventListener("pointercancel", grabEnd);
   home.addEventListener("click", (e) => {
     if (e.detail === 0) select(id);
   });

@@ -41,12 +41,19 @@ const SHADE = {
   fade: 2.2,
 };
 
+const HOLD = {
+  lift: 0.5, // cells above the surface while carried
+  rise: 0.045, // s time constant of the pick-up
+  reach: 7, // px of slack around a ball when grabbing it
+};
+
 const IMPACT = {
   swell: 0.11,
   pinch: 0.2,
   stiffness: 1900, // spring that rings the squash back out
   damping: 30,
-  spin: 0.7, // fraction of rolling-without-slipping
+  spin: 0.5, // fraction of rolling-without-slipping
+  settle: 0.09, // s for the pips to rock face-up once it has stopped
 };
 
 /* ── entrance storyboard ──────────────────────────────────────────────────
@@ -98,6 +105,8 @@ interface BallView {
   dropT: number;
   drops: number;
   alpha: number;
+  /** extra height while carried in a hand */
+  lift: number;
   // this frame
   px: number;
   py: number;
@@ -122,6 +131,8 @@ export class Stage {
   y0 = 0;
   private wall = 58;
   private dpr = 1;
+  private aimPad = -1;
+  private aimBall = -1;
 
   constructor(private engine: Engine) {
     this.device = document.getElementById("device")!;
@@ -181,6 +192,7 @@ export class Stage {
         dropT: this.reduced ? -1 : DROP.delay + DROP.stagger * this.views.length,
         drops: 0,
         alpha: -1,
+        lift: 0,
         px: 0,
         py: 0,
         z: 0,
@@ -255,7 +267,10 @@ export class Stage {
     this.pads[pad].classList.toggle("down", down);
   }
 
-  aim(pad: number) {
+  /** mark the pad a ball has been sent to; cleared when that ball gets there */
+  aim(pad: number, ball = -1) {
+    this.aimPad = pad;
+    this.aimBall = ball;
     for (let i = 0; i < this.pads.length; i++) this.pads[i].classList.toggle("aimed", i === pad);
   }
 
@@ -273,6 +288,48 @@ export class Stage {
     el.animate(DIP, { duration: 240 + 80 * power, easing: "cubic-bezier(0.2, 0.7, 0.3, 1)" });
   }
 
+  /** a resting ball under a client point, or -1. Balls in flight cannot be grabbed. */
+  ballAt(clientX: number, clientY: number): number {
+    const dev = this.device.getBoundingClientRect();
+    const x = clientX - dev.left;
+    const y = clientY - dev.top;
+    let best = -1;
+    let bestD = Infinity;
+    this.engine.balls.forEach((b, i) => {
+      if (b.mode !== "home" && b.mode !== "rest") return;
+      const v = this.views[i];
+      const d = Math.hypot(x - v.px, y - v.py);
+      if (d <= v.r + HOLD.reach && d < bestD) {
+        best = i;
+        bestD = d;
+      }
+    });
+    return best;
+  }
+
+  /** device px of a ball's centre this frame */
+  ballPx(id: number) {
+    const dev = this.device.getBoundingClientRect();
+    return { x: dev.left + this.views[id].px, y: dev.top + this.views[id].py };
+  }
+
+  /** client point → cell coords */
+  cellAt(clientX: number, clientY: number) {
+    const dev = this.device.getBoundingClientRect();
+    return {
+      x: (clientX - dev.left - this.x0) / this.c,
+      y: (this.y0 - (clientY - dev.top)) / this.c,
+    };
+  }
+
+  /** hand the carried height over to the engine as the start of a throw */
+  letGo(id: number): number {
+    const v = this.views[id];
+    const z = v.lift;
+    v.lift = 0;
+    return z;
+  }
+
   /** cancel the entrance (the user is already playing) */
   ready() {
     for (const v of this.views) v.dropT = -1;
@@ -281,7 +338,7 @@ export class Stage {
   render(sVis: number, now: number, dt: number) {
     const balls = this.engine.balls;
     const views = this.views;
-    for (let i = 0; i < balls.length; i++) this.locate(balls[i], views[i], sVis, now);
+    for (let i = 0; i < balls.length; i++) this.locate(balls[i], views[i], sVis, now, dt);
 
     // two balls cannot share a dimple: near the ground they nestle side by side
     for (let i = 0; i < views.length; i++) {
@@ -314,12 +371,19 @@ export class Stage {
   }
 
   /** where the ball is this frame, plus everything that happens on the way */
-  private locate(b: Ball, v: BallView, sVis: number, now: number) {
+  private locate(b: Ball, v: BallView, sVis: number, now: number, dt: number) {
     const p = this.engine.pose(b, sVis, this.pose);
     v.px = this.x0 + p.x * this.c;
     v.py = this.y0 - p.y * this.c;
     let z = p.z;
     let alpha = 1;
+
+    // picked up: rises off the surface under the finger
+    if (b.mode === "held") {
+      v.lift += (HOLD.lift - v.lift) * (1 - Math.exp(-dt / HOLD.rise));
+      v.dropT = -1;
+    }
+    z += v.lift;
 
     // entrance: fall in from above and rattle to rest
     if (v.dropT >= 0) {
@@ -382,7 +446,7 @@ export class Stage {
           v.swell = IMPACT.swell * (0.5 + 0.5 * f.power);
           v.swellV = 0;
           this.dip(this.wells[f.pad], f.power);
-          this.pads[f.pad].classList.remove("aimed");
+          if (f.pad === this.aimPad && b.id === this.aimBall) this.aim(-1);
         } else if (f.kind === "wall") {
           v.pinch = IMPACT.pinch * (0.5 + 0.5 * f.power);
           v.pinchV = 0;
@@ -422,7 +486,9 @@ export class Stage {
     const swell = this.reduced ? 0 : v.swell;
     const pinch = this.reduced ? 0 : v.pinch;
 
-    // spin: roll with the travel; at rest, rock round until the pips face up
+    // spin: the ball tumbles with its travel. Pips are printed on both poles,
+    // so one set is nearly always in view; when it stops it rocks round until
+    // the nearer set faces up. (Which ball is which should never be face-down.)
     if (!Number.isNaN(v.lx)) {
       const dx = px - v.lx;
       const dy = py - v.ly;
@@ -430,11 +496,15 @@ export class Stage {
       if (dist > 0.02 && dist < this.c * 2) {
         v.q = qnorm(qmul(qaxis(dy / dist, -dx / dist, 0, (dist / v.r) * IMPACT.spin), v.q));
       } else if (!air && dist <= 0.02) {
-        const pole = qrot(v.q, [0, 0, -1]);
-        const off = 1 - (pole[0] * v.rest[0] + pole[1] * v.rest[1] + pole[2] * v.rest[2]);
-        if (off > 0.0002) {
+        let pole = qrot(v.q, [0, 0, -1]);
+        let dot = pole[0] * v.rest[0] + pole[1] * v.rest[1] + pole[2] * v.rest[2];
+        if (dot < 0) {
+          pole = [-pole[0], -pole[1], -pole[2]];
+          dot = -dot;
+        }
+        if (1 - dot > 0.0002) {
           const goal = qmul(qarc(pole, v.rest), v.q);
-          v.q = qslerp(v.q, goal, 1 - Math.exp(-dt / 0.09));
+          v.q = qslerp(v.q, goal, 1 - Math.exp(-dt / IMPACT.settle));
         }
       }
     }

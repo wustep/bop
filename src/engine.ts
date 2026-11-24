@@ -31,6 +31,10 @@ export const H = 4;
 const LOOKAHEAD = 0.12;
 /** a hop shorter than this (seconds) is the ball coming to rest */
 const SETTLE = 0.05;
+/** release slower than this (cells/s) is a drop, faster is a throw */
+const FLICK = 3;
+/** throw speed (cells/s) that buys one more cell of stride */
+const FLICK_PER_CELL = 7;
 
 export interface WallHit {
   t: number;
@@ -70,7 +74,7 @@ export interface Fx {
   power: number;
 }
 
-export type Mode = "home" | "rest" | "fly";
+export type Mode = "home" | "rest" | "fly" | "held";
 
 export interface Ball {
   id: number;
@@ -141,8 +145,10 @@ export class Engine {
   private time0 = 0;
   private S = 15 / 96;
   private phase = 0;
+  private hooks: Hooks;
 
-  constructor(private hooks: Hooks, count: number) {
+  constructor(hooks: Hooks, count: number) {
+    this.hooks = hooks;
     for (let id = 0; id < count; id++) {
       this.balls.push({
         id,
@@ -197,6 +203,7 @@ export class Engine {
   tap(id: number, pad: number, now: number) {
     const b = this.balls[id];
     const s = this.stepAt(now);
+    if (b.mode === "held") return;
     b.serveAt = -1;
     b.homing = false;
     if (b.mode === "home") {
@@ -220,7 +227,7 @@ export class Engine {
     const b = this.balls[id];
     b.serveAt = -1;
     b.target = -1;
-    if (b.mode === "home") return;
+    if (b.mode === "home" || b.mode === "held") return;
     if (b.mode === "rest") {
       b.mode = "fly";
       this.flyHome(b, this.stepAt(now), b.cell, 0);
@@ -231,6 +238,74 @@ export class Engine {
     const p = this.pose(b, sv, { x: 0, y: 0, z: 0 });
     this.cut(b, sv);
     this.flyHome(b, sv, { x: p.x, y: p.y }, p.z);
+  }
+
+  /** a hand takes the ball: it leaves the simulation and goes where it is carried */
+  hold(id: number, at: Vec) {
+    const b = this.balls[id];
+    b.serveAt = -1;
+    b.target = -1;
+    b.homing = false;
+    b.fx.length = 0;
+    b.hop = null;
+    b.prev = null;
+    b.mode = "held";
+    b.cell = { ...at };
+  }
+
+  carry(id: number, at: Vec) {
+    const b = this.balls[id];
+    if (b.mode === "held") b.cell = { ...at };
+  }
+
+  /**
+   * Let go. A still hand drops the ball into the nearest well (or sends it
+   * home if it is off the tray); a moving hand throws it — direction from
+   * the hand, stride from how hard.
+   * @param vel cells per second, y up
+   * @param z0  how high it was being held
+   */
+  release(id: number, now: number, vel: Vec, z0: number) {
+    const b = this.balls[id];
+    if (b.mode !== "held") return;
+    const t0 = this.stepAt(now);
+    const at = b.cell;
+    const speed = Math.hypot(vel.x, vel.y);
+    const overTray = at.x > -0.8 && at.x < W - 0.2 && at.y > -0.8 && at.y < H - 0.2;
+    b.mode = "fly";
+    if (!overTray && speed < FLICK) {
+      this.flyHome(b, t0, at, z0);
+      return;
+    }
+    const from = {
+      x: clamp(Math.round(at.x), 0, W - 1),
+      y: clamp(Math.round(at.y), 0, H - 1),
+    };
+    const s = { x: 0, y: 0 };
+    if (speed >= FLICK) {
+      const n = clamp(Math.round(speed / FLICK_PER_CELL), 1, 3);
+      s.x = Math.round((vel.x / speed) * n);
+      s.y = Math.round((vel.y / speed) * n);
+    }
+    const d = Math.max(1, cheb(s));
+    const within = at.x >= -0.5 && at.x <= W - 0.5 && at.y >= -0.5 && at.y <= H - 0.5;
+    if (within) {
+      b.stride = s;
+      b.dur = d;
+      this.gridHop(b, from, s, t0, this.quantize(b, t0 + d), d, z0);
+      return;
+    }
+    // let go beyond the walls: it sails in over them, then carries on as thrown
+    const ex = from.x + s.x;
+    const ey = from.y + s.y;
+    const land = {
+      x: clamp(Math.round(fold(ex, W)), 0, W - 1),
+      y: clamp(Math.round(fold(ey, H)), 0, H - 1),
+    };
+    this.enter(b, cellPad(land), t0, at, z0, {
+      x: mirrored(ex, W) ? -s.x : s.x,
+      y: mirrored(ey, H) ? -s.y : s.y,
+    });
   }
 
   /** launch from the nest after a delay, in steps */
@@ -343,10 +418,10 @@ export class Engine {
   }
 
   /** a straight flight onto the tray from outside it (or from mid-air) */
-  private enter(b: Ball, pad: number, t0: number, from: Vec, z0: number) {
+  private enter(b: Ball, pad: number, t0: number, from: Vec, z0: number, stride?: Vec) {
     const p = padCell(pad);
-    const s = { x: Math.round(p.x - from.x), y: Math.round(p.y - from.y) };
-    if (s.x === 0 && s.y === 0) s.y = 1;
+    const s = stride ?? { x: Math.round(p.x - from.x), y: Math.round(p.y - from.y) };
+    if (!stride && s.x === 0 && s.y === 0) s.y = 1;
     const d = Math.max(1, cheb(s));
     const t1 = this.quantize(b, t0 + d);
     b.mode = "fly";
@@ -372,7 +447,7 @@ export class Engine {
     b.fx.push({ t: t1, kind: "land", pad, nx: 0, ny: 0, power: vel });
   }
 
-  private gridHop(b: Ball, u: Vec, s: Vec, t0: number, t1: number, d: number) {
+  private gridHop(b: Ball, u: Vec, s: Vec, t0: number, t1: number, d: number, z0 = 0) {
     const ex = u.x + s.x;
     const ey = u.y + s.y;
     const land = {
@@ -410,7 +485,7 @@ export class Engine {
       b: land,
       u: { ...u },
       s: { ...s },
-      z0: 0,
+      z0,
       h: this.height(span * this.S),
       t0,
       t1,
@@ -508,9 +583,10 @@ export class Engine {
     const ay = hop.a.y - fold(hop.u.y, H);
     const bx = hop.b.x - fold(hop.u.x + hop.s.x, W);
     const by = hop.b.y - fold(hop.u.y + hop.s.y, H);
-    out.x = reach(fold(ux, W), W, b.edge) + ax * (1 - k) + bx * k;
-    out.y = reach(fold(uy, H), H, b.edge) + ay * (1 - k) + by * k;
-    out.z = 4 * hop.h * k * (1 - k);
+    // the nudge is applied inside the walls, never through them
+    out.x = reach(clamp(fold(ux, W) + ax * (1 - k) + bx * k, -0.5, W - 0.5), W, b.edge);
+    out.y = reach(clamp(fold(uy, H) + ay * (1 - k) + by * k, -0.5, H - 0.5), H, b.edge);
+    out.z = hop.z0 * (1 - k) * (1 - k) + 4 * hop.h * k * (1 - k);
     return out;
   }
 }
